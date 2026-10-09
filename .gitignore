@@ -1,0 +1,31 @@
+# build artifacts
+bin/
+*.exe
+
+# runtime state
+*.pid
+schedule.json
+schedule.cmd.json
+used.json
+pool.txt
+token
+
+# scratch / dumps (DOM dumps, API captures, screenshots)
+*.png
+*.jpg
+all*.json
+aria.json
+b.json
+bp*.json
+
+# python
+__pycache__/
+*.pyc
+
+# logs
+*.log
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/

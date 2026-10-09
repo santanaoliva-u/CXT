@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font: 13px system-ui, sans-serif; width: 280px; margin: 0; padding: 12px; background: #14161a; color: #e6e6e6; }
+      h1 { font-size: 14px; margin: 0 0 8px; }
+      label { display: block; margin: 8px 0 2px; color: #9aa4b2; }
+      input[type="text"] { width: 100%; box-sizing: border-box; padding: 6px; background: #0d0f12; color: #e6e6e6; border: 1px solid #2a2f38; border-radius: 6px; }
+      .row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+      button { flex: 1; padding: 7px 10px; border: 0; border-radius: 6px; background: #2b6cff; color: #fff; cursor: pointer; }
+      button.ghost { background: #242833; }
+      #power { width: 100%; margin: 10px 0 2px; padding: 12px; font-size: 15px; font-weight: 700; letter-spacing: .5px; border-radius: 8px; }
+      #power.on { background: #16794a; }
+      #power.off { background: #a1261d; }
+      #status { margin-top: 10px; font-size: 12px; color: #9aa4b2; white-space: pre-wrap; }
+      .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #555; margin-right: 6px; }
+      .on-dot { background: #2ecc71; }
+      select, textarea { width: 100%; box-sizing: border-box; padding: 6px; background: #0d0f12; color: #e6e6e6; border: 1px solid #2a2f38; border-radius: 6px; }
+      textarea { height: 58px; resize: vertical; font: inherit; }
+      hr { border: 0; border-top: 1px solid #2a2f38; margin: 12px 0; }
+      h2 { font-size: 11px; margin: 0 0 4px; color: #9aa4b2; text-transform: uppercase; letter-spacing: .6px; }
+    </style>
+  </head>
+  <body>
+    <h1><span id="dot" class="dot"></span>CXT — Control local</h1>
+    <button id="power" class="off">● DESACTIVADA</button>
+    <label>Servidor</label>
+    <input id="server" type="text" placeholder="http://127.0.0.1:8799" />
+    <label>Token (opcional)</label>
+    <input id="token" type="text" placeholder="vacío = solo localhost" />
+    <div class="row">
+      <button id="save">Guardar</button>
+      <button id="test" class="ghost">Probar</button>
+    </div>
+    <div id="status">—</div>
+    <hr />
+    <h2>Auto-publicar</h2>
+    <label>Intervalo</label>
+    <select id="sint">
+      <option value="3">cada 3 min</option>
+      <option value="5" selected>cada 5 min</option>
+      <option value="10">cada 10 min</option>
+      <option value="0.1">cada 6 s (prueba)</option>
+    </select>
+    <label>Cantidad de publicaciones</label>
+    <input id="scount" type="number" min="1" value="3" />
+    <label>Tema</label>
+    <select id="stopic">
+      <option value="auto">auto (noticias de Playa del Carmen)</option>
+      <option value="fixed">texto fijo (abajo)</option>
+    </select>
+    <textarea id="stext" placeholder="Texto fijo (si eliges 'texto fijo')"></textarea>
+    <div class="row">
+      <button id="sstart">INICIAR</button>
+      <button id="sstop" class="ghost">DETENER</button>
+    </div>
+    <div id="sstatus">—</div>
+    <script src="popup.js"></script>
+  </body>
+</html>
