@@ -12,14 +12,15 @@ CXT = os.environ.get("CXT_BIN") or os.path.join(ROOT, "bin", "cxt")
 PUB = os.path.join(ROOT, "scripts", "clone_publish.py")
 NEWS = os.path.join(ROOT, "scripts", "news.sh")
 
+CITY = os.environ.get("CXT_CITY", "tu ciudad")
+HASHTAGS = os.environ.get("CXT_TAGS", "#Ciudad #Local")
 TEMPLATES = [
-    "Buenos días, Playa del Carmen. {t}",
-    "Ojo, Playa del Carmen: {t}",
-    "{t} — ¿Qué opinan? 🌴",
-    "Esto está pasando en Playa del Carmen: {t}",
-    "{t}\n\nBuenas noticias para Playa del Carmen. 🌴",
+    "Buenos días, " + CITY + ". {t}",
+    "Ojo, " + CITY + ": {t}",
+    "{t} — ¿Qué opinan?",
+    "Esto está pasando en " + CITY + ": {t}",
+    "{t}\n\nBuenas noticias para " + CITY + ".",
 ]
-HASHTAGS = "#PlayaDelCarmen #RivieraMaya #QuintanaRoo"
 
 
 def log(msg):
