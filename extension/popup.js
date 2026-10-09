@@ -10,6 +10,7 @@ async function load() {
   render();
   renderSched();
   renderShare();
+  renderSharePost();
 }
 
 function paint() {
@@ -119,5 +120,41 @@ $("gstop").addEventListener("click", async () => {
   setTimeout(renderShare, 900);
 });
 
+async function renderSharePost() {
+  const s = await chrome.runtime.sendMessage({ type: "sharePostGet" }).catch(() => null);
+  const el = $("pstatus");
+  if (!s || s.error) {
+    el.textContent = s && s.error ? "error: " + s.error : "sin datos";
+    return;
+  }
+  if (!s.total) {
+    el.textContent = s.running ? "iniciando…" : "sin ejecuciones";
+    return;
+  }
+  let t = `${s.running ? "COMPARTIENDO" : "terminado"} ${s.done || 0}/${s.total} · OK ${s.published || 0}`;
+  if (s.dry) t += " · SIMULACIÓN";
+  if (s.error) t += `\n${s.error}`;
+  if (s.current) t += `\nactual: ${s.current}`;
+  el.textContent = t;
+}
+
+$("pstart").addEventListener("click", async () => {
+  const url = $("purl").value.trim();
+  const filter = $("pfilter").value.trim();
+  const limit = Math.max(0, parseInt($("plimit").value) || 0);
+  const text = $("ptext").value.trim();
+  const dry = $("pdry").checked;
+  if (!filter) { $("pstatus").textContent = "escribe el filtro/nombres de grupos"; return; }
+  await chrome.runtime.sendMessage({ type: "sharePostSet", value: { url, filter, limit, dry, text, delay: 8 } }).catch(() => {});
+  $("pstatus").textContent = "iniciando…";
+  setTimeout(renderSharePost, 900);
+});
+
+$("pstop").addEventListener("click", async () => {
+  await chrome.runtime.sendMessage({ type: "sharePostSet", value: { stop: true } }).catch(() => {});
+  $("pstatus").textContent = "deteniendo…";
+  setTimeout(renderSharePost, 900);
+});
+
 load();
-setInterval(() => { render(); renderSched(); renderShare(); }, 2500);
+setInterval(() => { render(); renderSched(); renderShare(); renderSharePost(); }, 2500);

@@ -109,6 +109,24 @@ The extension popup also exposes a **Compartir en grupos** panel (filter, limit,
 text, *Simulación* checkbox, COMPARTIR / DETENER). The daemon endpoints are
 `GET/POST /sharegroups`.
 
+### Share an existing post to many groups
+
+`scripts/share_post.py` re-shares a post that already exists (your profile, a
+Page, or a permalink) to the groups you pick, using Facebook's **native**
+share dialog (language-independent selectors, no watermark). A reverse-engineered
+replica of the *ShareUnlimited* flow.
+
+```bash
+export CXT_TAB=<facebook-tab-id>
+python3 scripts/share_post.py --ids "Group A,Group B" --dry        # dry-run first
+python3 scripts/share_post.py --url https://www.facebook.com/... --ids "Group A" --no-dry
+```
+
+The popup adds a **Compartir publicación** panel (post URL or visible post,
+group filter, limit, optional extra text, *Simulación* checkbox). Daemon
+endpoints: `GET/POST /sharepost` (job runs `share_post.py --cmd`, status in
+`~/.cxt/share_post_status.json`).
+
 ## Security
 
 - Binds to `127.0.0.1` only; rejects web-page origins; optional token.

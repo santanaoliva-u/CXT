@@ -11,6 +11,8 @@ pool.txt
 groups.json
 share_status.json
 share.cmd.json
+share_post_status.json
+share_post.cmd.json
 token
 
 # scratch / dumps (DOM dumps, API captures, screenshots)

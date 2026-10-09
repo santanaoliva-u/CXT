@@ -937,5 +937,31 @@ chrome.runtime.onMessage.addListener((msg, _s, send) => {
     });
     return true;
   }
+  if (msg && msg.type === "sharePostGet") {
+    cfg().then(async (c) => {
+      try {
+        const r = await fetch(c.server + "/sharepost" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), { cache: "no-store" });
+        send(await r.json());
+      } catch (e) {
+        send({ ok: false, error: String(e) });
+      }
+    });
+    return true;
+  }
+  if (msg && msg.type === "sharePostSet") {
+    cfg().then(async (c) => {
+      try {
+        const r = await fetch(c.server + "/sharepost" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(msg.value || {}),
+        });
+        send(await r.json());
+      } catch (e) {
+        send({ ok: false, error: String(e) });
+      }
+    });
+    return true;
+  }
 });
 init();

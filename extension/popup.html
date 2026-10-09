@@ -47,7 +47,7 @@
     <input id="scount" type="number" min="1" value="3" />
     <label>Tema</label>
     <select id="stopic">
-      <option value="auto">auto (titulares de noticias)</option>
+      <option value="auto">auto (noticias de Playa del Carmen)</option>
       <option value="fixed">texto fijo (abajo)</option>
     </select>
     <textarea id="stext" placeholder="Texto fijo (si eliges 'texto fijo')"></textarea>
@@ -70,6 +70,22 @@
       <button id="gstop" class="ghost">DETENER</button>
     </div>
     <div id="gstatus">—</div>
+    <hr />
+    <h2>Compartir publicación</h2>
+    <label>Enlace del post (vacío = post visible)</label>
+    <input id="purl" type="text" placeholder="https://www.facebook.com/..." />
+    <label>Filtrar grupos (coma) o nombres</label>
+    <input id="pfilter" type="text" placeholder="playa del carmen, guadalupan" />
+    <label>Límite (0 = todos)</label>
+    <input id="plimit" type="number" min="0" value="3" />
+    <label>Texto extra (opcional)</label>
+    <textarea id="ptext" placeholder="Opcional: comentario que acompaña al compartido"></textarea>
+    <label><input type="checkbox" id="pdry" checked style="width:auto" /> Simulación (no publica)</label>
+    <div class="row">
+      <button id="pstart">COMPARTIR POST</button>
+      <button id="pstop" class="ghost">DETENER</button>
+    </div>
+    <div id="pstatus">—</div>
     <script src="popup.js"></script>
   </body>
 </html>
