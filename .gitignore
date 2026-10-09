@@ -8,6 +8,9 @@ schedule.json
 schedule.cmd.json
 used.json
 pool.txt
+groups.json
+share_status.json
+share.cmd.json
 token
 
 # scratch / dumps (DOM dumps, API captures, screenshots)

@@ -96,6 +96,7 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"ok": true, "version": "0.1.0", "extension_online": online, "enabled": enabled,
 		"sched_alive": schedulerAlive(), "sched_enabled": sch["enabled"], "sched_remaining": sch["remaining"],
+		"share_alive": sharerAlive(),
 	})
 }
 
@@ -192,6 +193,96 @@ func (s *server) handleScheduleSet(w http.ResponseWriter, r *http.Request) {
 	}
 	ensureScheduler()
 	writeJSON(w, 200, map[string]any{"ok": true, "pending": true, "alive": schedulerAlive()})
+}
+
+func shareStatusPath() string { return filepath.Join(home(), ".cxt", "share_status.json") }
+func shareCmdPath() string    { return filepath.Join(home(), ".cxt", "share.cmd.json") }
+func sharePidPath() string    { return filepath.Join(home(), ".cxt", "share.pid") }
+
+func readShareStatus() map[string]any {
+	b, err := os.ReadFile(shareStatusPath())
+	if err != nil {
+		return map[string]any{}
+	}
+	var m map[string]any
+	if json.Unmarshal(b, &m) != nil {
+		return map[string]any{}
+	}
+	return m
+}
+
+func readPid(path string) (int, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(string(b)))
+}
+
+func sharerAlive() bool {
+	b, err := os.ReadFile(sharePidPath())
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
+}
+
+func (s *server) handleShareGet(w http.ResponseWriter, r *http.Request) {
+	if !s.auth(w, r) {
+		return
+	}
+	m := readShareStatus()
+	m["alive"] = sharerAlive()
+	writeJSON(w, 200, m)
+}
+
+func (s *server) handleShareSet(w http.ResponseWriter, r *http.Request) {
+	if !s.auth(w, r) {
+		return
+	}
+	var st map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&st); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if b, ok := st["stop"].(bool); ok && b {
+		if pid, err := readPid(sharePidPath()); err == nil {
+			_ = syscall.Kill(pid, syscall.SIGTERM)
+		}
+		_ = os.Remove(sharePidPath())
+		writeJSON(w, 200, map[string]any{"ok": true, "stopped": true})
+		return
+	}
+	if sharerAlive() {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": "ya hay un share en curso"})
+		return
+	}
+	b, _ := json.Marshal(st)
+	if err := os.WriteFile(shareCmdPath(), b, 0o644); err != nil {
+		http.Error(w, "no se pudo escribir", http.StatusInternalServerError)
+		return
+	}
+	script := filepath.Join(home(), ".cxt", "groups_share.py")
+	cmd := exec.Command("setsid", "python3", script, "--cmd", shareCmdPath())
+	logf, _ := os.OpenFile("/tmp/cxt_share.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if logf != nil {
+		cmd.Stdout = logf
+		cmd.Stderr = logf
+	}
+	if err := cmd.Start(); err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	os.WriteFile(sharePidPath(), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644)
+	writeJSON(w, 200, map[string]any{"ok": true, "started": true, "pid": cmd.Process.Pid})
 }
 
 func (s *server) handleStat(w http.ResponseWriter, r *http.Request) {
@@ -339,6 +430,13 @@ func main() {
 			s.handleScheduleSet(w, r)
 		} else {
 			s.handleScheduleGet(w, r)
+		}
+	})
+	mux.HandleFunc("/sharegroups", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			s.handleShareSet(w, r)
+		} else {
+			s.handleShareGet(w, r)
 		}
 	})
 	mux.HandleFunc("/stat", s.handleStat)

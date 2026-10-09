@@ -1,7 +1,6 @@
 import json, os, subprocess, sys, time
 
 CXT = os.environ.get("CXT_BIN") or os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "bin", "cxt")
-CXT = os.path.abspath(CXT)
 TAB = int(os.environ["CXT_TAB"])
 
 

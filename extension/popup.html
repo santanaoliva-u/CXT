@@ -56,6 +56,20 @@
       <button id="sstop" class="ghost">DETENER</button>
     </div>
     <div id="sstatus">—</div>
+    <hr />
+    <h2>Compartir en grupos</h2>
+    <label>Filtrar grupos (separados por coma)</label>
+    <input id="gfilter" type="text" placeholder="playa del carmen, guadalupan" />
+    <label>Límite (0 = todos los filtrados)</label>
+    <input id="glimit" type="number" min="0" value="3" />
+    <label>Texto a compartir</label>
+    <textarea id="gtext" placeholder="Texto que se publicará en cada grupo"></textarea>
+    <label><input type="checkbox" id="gdry" checked style="width:auto" /> Simulación (no publica; solo prueba)</label>
+    <div class="row">
+      <button id="gstart">COMPARTIR</button>
+      <button id="gstop" class="ghost">DETENER</button>
+    </div>
+    <div id="gstatus">—</div>
     <script src="popup.js"></script>
   </body>
 </html>

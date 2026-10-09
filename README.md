@@ -90,6 +90,25 @@ Control it from the extension popup (**INICIAR / DETENER**).
 > Adapt selectors to your target. Automating a social network may violate its
 > Terms of Service — use only with accounts you own and at your own risk.
 
+## Share a post to many groups (optional)
+
+`scripts/groups_scan.py` enumerates the groups you belong to (lazy-load scroll
+inside the page) into `groups.json`, categorised by keywords. `scripts/groups_share.py`
+publishes a text to the groups you pick (by id or by keyword filter), reusing the
+composer flow with retries and a CDP dialog auto-accept hook.
+
+```bash
+export CXT_TAB=<facebook-tab-id>
+python3 scripts/groups_scan.py                 # -> groups.json (auto-run by the sharer if missing)
+python3 scripts/groups_share.py --list --filter playa
+python3 scripts/groups_share.py --ids 123,456 --text "hello" --dry   # dry-run first
+python3 scripts/groups_share.py --ids 123,456 --text "hello"          # real publish
+```
+
+The extension popup also exposes a **Compartir en grupos** panel (filter, limit,
+text, *Simulación* checkbox, COMPARTIR / DETENER). The daemon endpoints are
+`GET/POST /sharegroups`.
+
 ## Security
 
 - Binds to `127.0.0.1` only; rejects web-page origins; optional token.

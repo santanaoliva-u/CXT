@@ -22,12 +22,37 @@ async function post(server, path, token, obj) {
   return res.ok;
 }
 
+let dlgHooked = false;
+function hookDialogs() {
+  if (dlgHooked) return;
+  dlgHooked = true;
+  chrome.debugger.onEvent.addListener((src, method) => {
+    if (method === "Page.javascriptDialogOpening") {
+      chrome.debugger
+        .sendCommand({ tabId: src.tabId }, "Page.handleJavaScriptDialog", { accept: true })
+        .catch(() => {});
+    }
+  });
+}
+
+const pageEnabled = new Set();
+
 async function cdp(tabId, method, params) {
+  hookDialogs();
   try {
+    if (!pageEnabled.has(tabId)) {
+      try {
+        await chrome.debugger.sendCommand({ tabId }, "Page.enable", {});
+        pageEnabled.add(tabId);
+      } catch (e) {}
+    }
     return await chrome.debugger.sendCommand({ tabId }, method, params || {});
   } catch (e) {
+    pageEnabled.delete(tabId);
     try {
       await chrome.debugger.attach({ tabId }, "1.3");
+      await chrome.debugger.sendCommand({ tabId }, "Page.enable", {});
+      pageEnabled.add(tabId);
     } catch (e2) {}
     return await chrome.debugger.sendCommand({ tabId }, method, params || {});
   }
@@ -875,6 +900,32 @@ chrome.runtime.onMessage.addListener((msg, _s, send) => {
     cfg().then(async (c) => {
       try {
         const r = await fetch(c.server + "/schedule" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(msg.value || {}),
+        });
+        send(await r.json());
+      } catch (e) {
+        send({ ok: false, error: String(e) });
+      }
+    });
+    return true;
+  }
+  if (msg && msg.type === "shareGet") {
+    cfg().then(async (c) => {
+      try {
+        const r = await fetch(c.server + "/sharegroups" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), { cache: "no-store" });
+        send(await r.json());
+      } catch (e) {
+        send({ ok: false, error: String(e) });
+      }
+    });
+    return true;
+  }
+  if (msg && msg.type === "shareSet") {
+    cfg().then(async (c) => {
+      try {
+        const r = await fetch(c.server + "/sharegroups" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(msg.value || {}),

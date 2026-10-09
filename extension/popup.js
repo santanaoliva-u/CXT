@@ -9,6 +9,7 @@ async function load() {
   paint();
   render();
   renderSched();
+  renderShare();
 }
 
 function paint() {
@@ -83,5 +84,40 @@ $("sstop").addEventListener("click", async () => {
   setTimeout(renderSched, 700);
 });
 
+async function renderShare() {
+  const s = await chrome.runtime.sendMessage({ type: "shareGet" }).catch(() => null);
+  const el = $("gstatus");
+  if (!s || s.error) {
+    el.textContent = s && s.error ? "error: " + s.error : "sin datos";
+    return;
+  }
+  if (!s.total) {
+    el.textContent = "sin ejecuciones";
+    return;
+  }
+  let t = `${s.running ? "COMPARTIENDO" : "terminado"} ${s.done || 0}/${s.total} · OK ${s.published || 0}`;
+  if (s.dry) t += " · SIMULACIÓN";
+  if (s.current) t += `\nactual: ${s.current}`;
+  el.textContent = t;
+}
+
+$("gstart").addEventListener("click", async () => {
+  const filter = $("gfilter").value.trim();
+  const limit = Math.max(0, parseInt($("glimit").value) || 0);
+  const text = $("gtext").value.trim();
+  const dry = $("gdry").checked;
+  if (!filter) { $("gstatus").textContent = "escribe un filtro de grupos"; return; }
+  if (!text) { $("gstatus").textContent = "escribe el texto a compartir"; return; }
+  await chrome.runtime.sendMessage({ type: "shareSet", value: { text, filter, limit, dry, interval_sec: 8 } }).catch(() => {});
+  $("gstatus").textContent = "iniciando…";
+  setTimeout(renderShare, 900);
+});
+
+$("gstop").addEventListener("click", async () => {
+  await chrome.runtime.sendMessage({ type: "shareSet", value: { stop: true } }).catch(() => {});
+  $("gstatus").textContent = "deteniendo…";
+  setTimeout(renderShare, 900);
+});
+
 load();
-setInterval(() => { render(); renderSched(); }, 2500);
+setInterval(() => { render(); renderSched(); renderShare(); }, 2500);
