@@ -1,31 +1,32 @@
-# CXT — Control your real Chrome from a local agent
+# CXT — Controla tu Chrome real desde un agente local
 
-CXT lets a local process (an AI agent, a script, your terminal) drive **your
-real Chrome session** — the one already logged in — through a tiny local bridge
-and a Chrome extension. No remote debugging port, no separate browser.
+CXT deja que un agente (una IA, un script o tu terminal) maneje **tu Chrome real** —
+el que ya tienes abierto y con sesión iniciada— a través de un puente local mínimo y
+una extensión de Chrome. **Sin puerto de depuración remota y sin un navegador aparte.**
 
 ```
-AI agent / CLI  ──HTTP──▶  cxtd (127.0.0.1:8799)  ──long-poll──▶  Chrome extension  ──▶  the tab you choose
+Agente / CLI  ──HTTP──▶  cxtd (127.0.0.1:8799)  ──long-poll──▶  Extensión Chrome  ──▶  tu pestaña real
 ```
 
-- **Daemon (`cxtd`)**: local HTTP server, queue + long-poll. No shell access.
-- **CLI (`cxt`)**: send one op and print the JSON result.
-- **Extension (MV3)**: executes ops in tabs (click, type, scroll, screenshot…)
-  and can click through the **shadow DOM** and via **CDP** (`chrome.debugger`)
-  when a site needs *trusted* input.
+- **Daemon (`cxtd`)**: servidor HTTP local con cola de comandos y *long-poll*. **No da shell a la máquina.**
+- **CLI (`cxt`)**: envía una operación y te imprime el resultado en JSON.
+- **Extensión (MV3)**: ejecuta las operaciones en la pestaña (clic, escribir, scroll, captura…),
+  atraviesa el **shadow DOM** y puede usar **CDP** (`chrome.debugger`) cuando el sitio exige
+  entrada *confiable* (Facebook, etc.).
 
-## Why
+## ¿Por qué?
 
-Web UIs force you to click like a human. CXT gives an agent a small, scriptable
-surface over the browser you already use, with a hard **kill switch** you own.
+Las webs te obligan a hacer clic "como un humano". CXT le da al agente una superficie
+pequeña y programable sobre el navegador que ya usas, y con un **interruptor de apagado**
+que controlas tú.
 
-## Requirements
+## Requisitos
 
-- Linux or macOS
-- Go 1.26+, Python 3, Node 18+ (only for tests)
-- Google Chrome / Chromium (MV3)
+- Linux o macOS
+- Go 1.26+, Python 3, Node 18+ (Node solo para los tests)
+- Google Chrome / Chromium (extensiones MV3)
 
-## Install (fast)
+## Instalación rápida
 
 ```bash
 git clone git@github.com:santanaoliva-u/CXT.git
@@ -33,145 +34,160 @@ cd CXT
 bash install.sh
 ```
 
-`install.sh` builds `bin/cxtd` and `bin/cxt` and prints the 3 remaining steps.
-Full manual equivalent:
+`install.sh` compila `bin/cxtd` y `bin/cxt` y te imprime los 3 pasos que faltan.
+A mano es equivalente a:
 
 ```bash
 ./build.sh                 # -> bin/cxtd, bin/cxt
-./bin/cxtd &               # start the local bridge
-# Chrome: chrome://extensions -> Developer mode -> Load unpacked -> select ./extension
+./bin/cxtd &               # arranca el puente local en 127.0.0.1:8799
+# Chrome: chrome://extensions -> Modo desarrollador -> Cargar descomprimida -> ./extension
 ```
 
-## Quick start
+En el popup de la extensión pon el servidor `http://127.0.0.1:8799` (deja el token vacío
+salvo que arranques `cxtd` con `CXT_TOKEN=...`). Pulsa **Guardar**. Un punto **verde** = conectado.
+
+## Primeros pasos
 
 ```bash
-./bin/cxt status                                   # {"enabled":true,"extension_online":true,...}
-./bin/cxt tabs                                     # list tabs (id, url, title)
-TAB=<facebook-tab-id>
+./bin/cxt status          # salud: enabled, extension_online, scripts_ok, jobs...
+./bin/cxt tabs            # lista de pestañas (id, url, título)
+TAB=<id-de-la-pestana>
 ./bin/cxt navigate "{\"tabId\":$TAB,\"url\":\"https://example.com\"}"
-./bin/cxt snapshot "{\"tabId\":$TAB}"              # compact a11y-like snapshot with refs @eN
-./bin/cxt cdpclicktext "{\"tabId\":$TAB,\"text\":\"Sign in\"}"   # trusted click via CDP
-./bin/cxt read "{\"tabId\":$TAB}"                  # page text (trimmed)
+./bin/cxt snapshot "{\"tabId\":$TAB}"                                   # lista compacta con refs @eN
+./bin/cxt cdpclicktext "{\"tabId\":$TAB,\"text\":\"Iniciar sesion\"}"   # clic "confiable" (CDP)
+./bin/cxt read "{\"tabId\":$TAB}"                                       # texto de la página (recortado)
 ./bin/cxt cdp "{\"method\":\"Page.captureScreenshot\",\"params\":{\"format\":\"png\"},\"tabId\":$TAB}"
 ```
 
-Any op: `./bin/cxt <op> '<json args>'`. The CLI accepts free text too:
+Cualquier operación es `./bin/cxt <op> '<json>'`. El CLI también acepta texto libre:
 `./bin/cxt echo hola`.
 
-## Ops (subset)
+## Operaciones (resumen)
 
-| Op | Purpose |
+| Operación | Para qué sirve |
 |---|---|
-| `status` / `ping` | daemon + extension health |
-| `tabs`, `tab.new`, `tab.activate`, `tab.close` | tab management |
-| `navigate`, `back`, `forward`, `reload` | navigation |
-| `read` | visible text of the page/main area |
-| `snapshot` | compact element list with refs `@eN` (a11y-ish) |
-| `click`, `type`, `key`, `scroll`, `waitFor` | DOM interaction |
-| `deepfind`, `find` | query elements (pierces shadow DOM) |
-| `cdpclick`, `cdpclicktext`, `cdpclickref`, `cdptype`, `cdpkey`, `cdp` | **trusted** input / raw CDP |
-| `probe`, `batch`, `macro` | cheap checks, batched ops, named recipes |
-| `screenshot` | viewport PNG (base64) |
+| `status` / `ping` | salud del daemon y de la extensión |
+| `tabs`, `tab.new`, `tab.activate`, `tab.close` | manejo de pestañas |
+| `navigate`, `back`, `forward`, `reload` | navegación |
+| `read` | texto visible de la página / área principal |
+| `snapshot` | lista compacta de elementos con refs `@eN` (tipo accesibilidad) |
+| `find`, `deepfind` | buscar elementos por texto (atraviesa shadow DOM) |
+| `click`, `type`, `key`, `scroll`, `wait`, `waitFor` | interacción con el DOM |
+| `cdpclick`, `cdpclicktext`, `cdpclickref`, `cdptype`, `cdpkey`, `cdp` | entrada **confiable** (CDP) y CDP crudo |
+| `probe`, `batch`, `macro` | chequeos baratos, operaciones por lotes, recetas con nombre |
+| `screenshot` | PNG del viewport (base64) |
+| `selftest` | auto-verificación (scripts, grupos, jobs) |
 
-## Kill switch (you own it)
+## Interruptor de seguridad (lo controlas tú)
 
-The extension has a big **ACTIVADA / DESACTIVADA** button. When disabled,
-**nothing runs**: the daemon refuses every command and the extension stops
-polling. It can only be re-armed from the popup (the agent cannot re-enable it).
+La extensión tiene un botón grande **ACTIVADA / DESACTIVADA**. Cuando está desactivada
+**no corre nada**: el daemon rechaza cada comando y la extensión deja de hacer *polling*.
+**Solo se puede reactivar desde el popup** (el agente no puede volver a encenderla).
+El estado también se refleja en el badge y en `/health` (`enabled`).
 
-## Auto-publish scheduler (optional)
+## Paneles del popup
 
-`scripts/scheduler.py` reads `~/.cxt/schedule.json` and, at a fixed interval,
-publishes N posts (text from `scripts/news.sh` headlines or a fixed text) using
-`scripts/clone_publish.py`. It stops cleanly when the count is exhausted.
-Control it from the extension popup (**INICIAR / DETENER**).
+- **Auto-publicar**: cada X minutos (3 / 5 / 10…), N publicaciones, con texto automático
+  (titulares de `news.sh`) o fijo. Botones INICIAR / DETENER.
+- **Compartir en grupos**: escribe un texto y lo publica en los grupos que elijas
+  (por filtro de nombre o por id). Casilla *Simulación* para probar sin publicar.
+- **Compartir publicación**: re-comparte una publicación que ya existe (tu perfil, una
+  Página o un enlace) a los grupos elegidos, usando el diálogo **nativo** de Facebook.
+- **Comentar**: comenta en una publicación (por URL o la más reciente) en modo fijo o
+  automático (cada X minutos, N veces).
+- **Grupos**: vuelve a escanear tus grupos y muestra cuántos hay por categoría.
 
-> These helpers are site-specific examples (they target a Facebook composer).
-> Adapt selectors to your target. Automating a social network may violate its
-> Terms of Service — use only with accounts you own and at your own risk.
+## Scripts opcionales (ejemplos para redes)
 
-## Share a post to many groups (optional)
+> Son ejemplos específicos de sitio (apuntan al compositor de Facebook). Adapta los
+> selectores a tu objetivo. Automatizar una red social puede violar sus Términos de
+> Servicio: úsalo solo con cuentas tuyas y bajo tu responsabilidad.
 
-`scripts/groups_scan.py` enumerates the groups you belong to (lazy-load scroll
-inside the page) into `groups.json`, categorised by keywords. `scripts/groups_share.py`
-publishes a text to the groups you pick (by id or by keyword filter), reusing the
-composer flow with retries and a CDP dialog auto-accept hook.
+En el repo viven en `scripts/`; en una instalación local (`~/.cxt`) están directamente
+en esa carpeta.
 
 ```bash
-export CXT_TAB=<facebook-tab-id>
-python3 scripts/groups_scan.py                 # -> groups.json (auto-run by the sharer if missing)
+export CXT_TAB=<id-de-la-pestana-de-facebook>
+
+# Publicar un texto (una vez o programado):
+python3 scripts/clone_publish.py mi_texto.txt
+
+# Scheduler: publica N posts cada X minutos y se detiene solo:
+python3 scripts/scheduler.py
+
+# Escanear y compartir texto en grupos:
+python3 scripts/groups_scan.py                       # -> groups.json (categorías por palabras clave)
 python3 scripts/groups_share.py --list --filter playa
-python3 scripts/groups_share.py --ids 123,456 --text "hello" --dry   # dry-run first
-python3 scripts/groups_share.py --ids 123,456 --text "hello"          # real publish
+python3 scripts/groups_share.py --ids 123,456 --text "hola" --dry    # simulación (recomendado)
+python3 scripts/groups_share.py --ids 123,456 --text "hola"          # publica de verdad
+
+# Re-compartir una publicación existente (nativo, sin marca de agua):
+python3 scripts/share_post.py --ids "Grupo A,Grupo B" --dry
+python3 scripts/share_post.py --url https://www.facebook.com/... --ids "Grupo A" --no-dry
+
+# Comentar:
+python3 scripts/comment.py --url https://... --text "buen post" --dry
+python3 scripts/comment.py --url https://... --text "buen post" --no-dry
+python3 scripts/comment.py --delete "texto a buscar"                 # borra un comentario tuyo
 ```
 
-The extension popup also exposes a **Compartir en grupos** panel (filter, limit,
-text, *Simulación* checkbox, COMPARTIR / DETENER). The daemon endpoints are
-`GET/POST /sharegroups`.
+Cada panel del popup hace lo mismo a través del daemon:
+`/schedule` (auto-publicar), `/sharegroups`, `/sharepost`, `/comment` y `/groupscan`.
 
-### Share an existing post to many groups
-
-`scripts/share_post.py` re-shares a post that already exists (your profile, a
-Page, or a permalink) to the groups you pick, using Facebook's **native**
-share dialog (language-independent selectors, no watermark). A reverse-engineered
-replica of the *ShareUnlimited* flow.
+## Auto-verificación
 
 ```bash
-export CXT_TAB=<facebook-tab-id>
-python3 scripts/share_post.py --ids "Group A,Group B" --dry        # dry-run first
-python3 scripts/share_post.py --url https://www.facebook.com/... --ids "Group A" --no-dry
+python3 test_stack.py        # daemon aislado, sin navegador: imprime PASS/FAIL
+./test_bridge.sh             # daemon + extensión simulada (mock)
+./bin/cxt selftest           # GET /selftest: scripts presentes, nº de grupos, jobs
 ```
 
-The popup adds a **Compartir publicación** panel (post URL or visible post,
-group filter, limit, optional extra text, *Simulación* checkbox). Daemon
-endpoints: `GET/POST /sharepost` (job runs `share_post.py --cmd`, status in
-`~/.cxt/share_post_status.json`).
+`/health` incluye `scripts_ok`. `/selftest` informa `cxt_dir`, scripts que falten,
+`groups_count` y si cada job está vivo.
 
-## Comment autopost (optional)
+## Configuración (variables de entorno)
 
-`scripts/comment.py` posts a comment on a post (by URL, or the newest comment box
-on the page) and can run as a job: N comments every X minutes, with de-dup. The
-box is focused via JS (robust against layout) and submitted with Enter or the
-button.
+- `CXT_DIR` — carpeta de estado/scripts (por defecto `~/.cxt`). El daemon lee sus
+  scripts y su estado de aquí.
+- `CXT_BIN` — ruta al CLI `cxt` (si no, `<repo>/bin/cxt`).
+- `CXT_TAB` — id de la pestaña objetivo (si no, la primera de `facebook.com`).
+- `CXT_PORT` / `CXT_TOKEN` — puerto del daemon / token opcional.
+- `CXT_CITY` / `CXT_TAGS` — tema y hashtags por defecto del auto-publicar.
+- `scripts/cxtlib.py` — utilidades compartidas que usan los scripts.
 
-```bash
-export CXT_TAB=<facebook-tab-id>
-python3 scripts/comment.py --url https://... --text "nice post" --dry   # dry-run first
-python3 scripts/comment.py --url https://... --text "nice post" --no-dry
-python3 scripts/comment.py --delete "text to find"                       # delete one of your comments
-```
+## Seguridad
 
-Popup panel **Comentar** (URL, auto/fixed text, interval, count, *Simulación*).
-Daemon endpoints: `GET/POST /comment`. Groups can be re-scanned from the popup
-(**Grupos** panel) or `GET/POST /groupscan`.
+- Escucha **solo en `127.0.0.1`** y **rechaza peticiones con `Origin` web** (una página
+  maliciosa no puede hablar con el daemon). Los procesos locales y la extensión
+  (`chrome-extension://`) sí.
+- Token opcional (`CXT_TOKEN` o `~/.cxt/token`); la extensión lo envía como `?token=`.
+- La extensión controla el **navegador**, no el sistema operativo: no da shell.
+- No subas secretos al repo. El `.gitignore` excluye binarios, capturas y estado en tiempo de ejecución.
 
-## Self-check
+## Aviso
 
-```bash
-python3 test_stack.py        # isolated daemon, no browser: PASS/FAIL
-./test_bridge.sh             # daemon + mock extension
-./bin/cxt selftest           # GET /selftest: scripts present, groups count, jobs
-```
+Automatizar la publicación en plataformas (Facebook, X, TikTok…) puede violar sus
+Términos de Servicio y **banear tu cuenta**. Úsalo con tus propias cuentas y bajo tu
+responsabilidad.
 
-`/health` includes `scripts_ok`; `/selftest` reports `cxt_dir`, any missing
-scripts, `groups_count` and each job's alive flag.
+## Licencia
 
-## Configuration
+MIT — ver `LICENSE`.
 
-- `CXT_DIR` — state/scripts dir (default `~/.cxt`); the daemon reads its scripts
-  and state from here.
-- `CXT_BIN` — path to the `cxt` CLI (else `<repo>/bin/cxt`).
-- `CXT_TAB` — target tab id (else the first `facebook.com` tab).
-- `CXT_PORT` / `CXT_TOKEN` — daemon port / optional token.
-- `scripts/cxtlib.py` — shared helpers used by the scripts.
+## Rendimiento (nota)
 
-## Security
+El motor de búsqueda de la extensión usa `Element.checkVisibility()` con caché, un tope
+de nodos (~8000), parada temprana y auto-desacople del *debugger* a los pocos segundos
+sin operaciones, para no trabar el navegador. El almacenamiento se escribe con *throttle*.
 
-- Binds to `127.0.0.1` only; rejects web-page origins; optional token.
-- The extension controls the **browser**, not the OS — no shell.
-- Never commit secrets. `.gitignore` excludes binaries, screenshots and runtime
-  state.
+---
 
-## License
+## TL;DR (English)
 
-MIT — see `LICENSE`.
+CXT drives **your real, already-logged-in Chrome** from a local agent via a tiny local
+bridge (`cxtd` on `127.0.0.1:8799`) plus an MV3 extension — no remote debugging port and
+no separate browser. The extension clicks through the shadow DOM and uses CDP for
+*trusted* input. It ships a hard **kill switch** you own, plus optional site-specific
+helpers (auto-publish scheduler, group scan/share, re-share an existing post, comment
+autopost). Build with `bash install.sh`, load `./extension` unpacked, then
+`./bin/cxt status`. MIT licensed.
