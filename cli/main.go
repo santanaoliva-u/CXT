@@ -50,6 +50,32 @@ func main() {
 		fmt.Print(usage)
 		return
 	}
+	if op == "selftest" {
+		server := os.Getenv("CXT_SERVER")
+		if server == "" {
+			server = "http://127.0.0.1:8799"
+		}
+		token := os.Getenv("CXT_TOKEN")
+		endpoint := strings.TrimRight(server, "/") + "/selftest"
+		if token != "" {
+			endpoint += "?token=" + url.QueryEscape(token)
+		}
+		resp, err := http.Get(endpoint)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error de conexion con cxtd: %v\n", err)
+			os.Exit(1)
+		}
+		defer resp.Body.Close()
+		rb, _ := io.ReadAll(resp.Body)
+		fmt.Println(string(rb))
+		var probe map[string]any
+		if json.Unmarshal(rb, &probe) == nil {
+			if okv, _ := probe["ok"].(bool); !okv {
+				os.Exit(1)
+			}
+		}
+		return
+	}
 	if op == "status" || op == "health" {
 		server := os.Getenv("CXT_SERVER")
 		if server == "" {

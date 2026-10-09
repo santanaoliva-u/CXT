@@ -1,7 +1,9 @@
 import json, os, subprocess, sys, time
 
-CXT = os.environ.get("CXT_BIN") or os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "bin", "cxt")
-TAB = int(os.environ["CXT_TAB"])
+import cxtlib
+
+CXT = cxtlib.resolve_cxt()
+TAB = cxtlib.resolve_tab(CXT)
 
 
 def call(op, args):

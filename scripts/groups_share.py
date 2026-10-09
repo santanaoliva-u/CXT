@@ -1,8 +1,10 @@
 import json, os, subprocess, sys, time, unicodedata
 
+import cxtlib
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-CXT = os.environ.get("CXT_BIN") or os.path.join(os.path.dirname(HERE), "bin", "cxt")
-TAB = int(os.environ["CXT_TAB"])
+CXT = cxtlib.resolve_cxt()
+TAB = cxtlib.resolve_tab(CXT)
 GJ = os.path.join(HERE, "groups.json")
 STATUS = os.path.join(HERE, "share_status.json")
 PID = os.path.join(HERE, "share.pid")

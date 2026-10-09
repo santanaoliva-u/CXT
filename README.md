@@ -127,6 +127,44 @@ group filter, limit, optional extra text, *Simulación* checkbox). Daemon
 endpoints: `GET/POST /sharepost` (job runs `share_post.py --cmd`, status in
 `~/.cxt/share_post_status.json`).
 
+## Comment autopost (optional)
+
+`scripts/comment.py` posts a comment on a post (by URL, or the newest comment box
+on the page) and can run as a job: N comments every X minutes, with de-dup. The
+box is focused via JS (robust against layout) and submitted with Enter or the
+button.
+
+```bash
+export CXT_TAB=<facebook-tab-id>
+python3 scripts/comment.py --url https://... --text "nice post" --dry   # dry-run first
+python3 scripts/comment.py --url https://... --text "nice post" --no-dry
+python3 scripts/comment.py --delete "text to find"                       # delete one of your comments
+```
+
+Popup panel **Comentar** (URL, auto/fixed text, interval, count, *Simulación*).
+Daemon endpoints: `GET/POST /comment`. Groups can be re-scanned from the popup
+(**Grupos** panel) or `GET/POST /groupscan`.
+
+## Self-check
+
+```bash
+python3 test_stack.py        # isolated daemon, no browser: PASS/FAIL
+./test_bridge.sh             # daemon + mock extension
+./bin/cxt selftest           # GET /selftest: scripts present, groups count, jobs
+```
+
+`/health` includes `scripts_ok`; `/selftest` reports `cxt_dir`, any missing
+scripts, `groups_count` and each job's alive flag.
+
+## Configuration
+
+- `CXT_DIR` — state/scripts dir (default `~/.cxt`); the daemon reads its scripts
+  and state from here.
+- `CXT_BIN` — path to the `cxt` CLI (else `<repo>/bin/cxt`).
+- `CXT_TAB` — target tab id (else the first `facebook.com` tab).
+- `CXT_PORT` / `CXT_TOKEN` — daemon port / optional token.
+- `scripts/cxtlib.py` — shared helpers used by the scripts.
+
 ## Security
 
 - Binds to `127.0.0.1` only; rejects web-page origins; optional token.
