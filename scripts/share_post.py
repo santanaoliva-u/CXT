@@ -57,18 +57,25 @@ def sleep(ms):
     time.sleep(ms / 1000.0)
 
 
+def wait_js(expr, tries=12, interval=0.6):
+    for _ in range(max(1, tries)):
+        r = cdp(expr)
+        if r:
+            return r
+        sleep(int(interval * 1000))
+    return None
+
+
 # ---------------------------------------------------------------- JS helpers
 JS_VISIBLE = "const vis=(e)=>{const r=e.getBoundingClientRect();const s=getComputedStyle(e);return r.width>4&&r.height>4&&s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';};"
 
 JS_FIND_SHARE = "(()=>{" + JS_VISIBLE + """
- const want=['share','compartir'];
- for(const el of document.querySelectorAll('[aria-label]')){
-   const a=(el.getAttribute('aria-label')||'').trim().toLowerCase();
-   if(!want.includes(a)) continue;
-   if(!vis(el)) continue; const r=el.getBoundingClientRect();
-   if(r.width>18 && r.width<92 && r.height>14 && r.y>30 && r.y<620)
-     return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};
- } return null;})()"""
+ const cands=[...document.querySelectorAll('[aria-label]')].filter(el=>/^(share|compartir)$/i.test((el.getAttribute('aria-label')||'').trim())).filter(vis);
+ if(!cands.length) return null;
+ const el=cands.find(e=>e.closest('[role=dialog]'))||cands[0];
+ el.scrollIntoView({block:'center'});
+ const r=el.getBoundingClientRect();
+ return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),inDialog:!!el.closest('[role=dialog]')};})()"""
 
 JS_GROUP_OPTION = "(()=>{" + JS_VISIBLE + """
  const want=['share to a group','compartir en un grupo'];
@@ -82,10 +89,22 @@ JS_GROUP_OPTION = "(()=>{" + JS_VISIBLE + """
    const al=(b.getAttribute('aria-label')||'').toLowerCase();
    const t=(b.textContent||'').trim().toLowerCase();
    if(!vis(b)) continue;
-   if(/grupo/.test(al) || /^grupo$/.test(t)){const r=b.getBoundingClientRect();
+   if(/grupo/.test(al) || /grupo/.test(t)){const r=b.getBoundingClientRect();
      if(r.width>40&&r.y>40&&r.y<640) best={x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};}
  }
  return best;})()"""
+
+JS_MENU = "(()=>{" + JS_VISIBLE + """
+ const norm=(s)=>(s||'').replace(/\\s+/g,' ').trim().toLowerCase();
+ for(const el of document.querySelectorAll('[aria-label]')){
+   const a=(el.getAttribute('aria-label')||'').trim().toLowerCase();
+   if((a==='compartir en un grupo'||a==='share to a group')&&vis(el)) return {open:true};
+ }
+ for(const b of document.querySelectorAll('div[role=button],a[role=button]')){
+   if(!vis(b)) continue; const t=norm(b.textContent||'');
+   if(t==='compartir ahora'||t==='share now') return {open:true};
+ }
+ return null;})()"""
 
 JS_SCROLL_MODAL = "(()=>{const el=[...document.querySelectorAll('*')].filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.x>200&&r.x<745&&r.y>40&&r.y<645&&r.height>250&&(s.overflowY==='auto'||s.overflowY==='scroll');})[0];if(el){el.scrollBy(0,360);return true;}return false;})()"""
 
@@ -94,9 +113,15 @@ JS_PICKER = "(()=>{" + JS_VISIBLE + """
    const a=((i.getAttribute('aria-label')||'')+' '+(i.placeholder||'')).toLowerCase();
    const r=i.getBoundingClientRect();
    return r.x>200 && r.y>40 && /grupo|group/.test(a);});
- if(inp){const r=inp.getBoundingClientRect();
-   return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};}
- return null;})()"""
+ if(!inp) return null;
+ inp.scrollIntoView({block:'center'});
+ inp.focus();
+ const r=inp.getBoundingClientRect();
+ return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),focused:document.activeElement===inp,value:inp.value};})()"""
+
+JS_PICKER_VALUE = "(()=>{" + JS_VISIBLE + """
+ const inp=[...document.querySelectorAll('input[type=search]')].filter(vis).find(i=>{const a=((i.getAttribute('aria-label')||'')+' '+(i.placeholder||'')).toLowerCase();return /grupo|group/.test(a);});
+ return inp?inp.value:null;})()"""
 
 JS_RESET = "(()=>{" + JS_VISIBLE + """
  const b=[...document.querySelectorAll('div[role=button],button,a[role=button]')].find(e=>{
@@ -123,7 +148,7 @@ JS_SUBMIT = "(()=>{" + JS_VISIBLE + """
    const t=(b.textContent||'').trim(); return t.length>2 && t.length<45;});
  const pick=(re)=>{for(let i=btns.length-1;i>=0;i--){const t=(btns[i].textContent||'').trim();
    if(re.test(t)) return btns[i];} return null;};
- const b=pick(/share to selected/i)||pick(/^(publicar|compartir ahora|compartir)$/i)||pick(/publicar|compartir/i);
+ const b=pick(/share to selected/i)||pick(/^(publicar|post)$/i)||pick(/publicar/i)||pick(/compartir/i);
  if(!b) return null;
  if((b.getAttribute('aria-disabled')||'')==='true') return {disabled:true};
  const r=b.getBoundingClientRect();
@@ -168,44 +193,44 @@ def ensure_tab():
     call("tab.activate", {"tabId": TAB})
 
 
-JS_BRING_SHARE = """(()=>{const el=document.querySelector('[aria-label="Share"],[aria-label="Compartir"]');
+JS_BRING_SHARE = """(()=>{const c=[...document.querySelectorAll('[aria-label="Share"],[aria-label="Compartir"]')];
+ const el=c.find(e=>e.closest('[role=dialog]'))||c[0];
  if(el){el.scrollIntoView({block:'center'});return true;}return false;})()"""
 
 
 def open_share():
-    for _ in range(18):
-        if cdp(JS_BRING_SHARE):
-            sleep(600)
-            r = cdp(JS_FIND_SHARE)
-            if r:
-                click(r["x"], r["y"])
-                sleep(1500)
-                return True
-        else:
+    for _ in range(2):
+        call("cdpkey", {"tabId": TAB, "key": "Escape"})
+        sleep(400)
+    for _ in range(5):
+        f = None
+        for _ in range(16):
+            f = cdp(JS_FIND_SHARE)
+            if f:
+                break
             cdp("(()=>{const s=document.scrollingElement||document.documentElement;"
-                "s.scrollBy(0,480);window.scrollBy(0,480);return true;})()")
-        sleep(800)
+                "s.scrollBy(0,420);window.scrollBy(0,420);return true;})()")
+            sleep(650)
+        if not f:
+            sleep(1200)
+            continue
+        click(f["x"], f["y"])
+        if wait_js(JS_MENU, 14, 0.6):
+            return True
+        call("cdpkey", {"tabId": TAB, "key": "Escape"})
+        sleep(900)
     return False
 
 
 def open_group_option():
-    for _ in range(14):
-        if cdp(JS_PICKER):
-            r = cdp(JS_RESET)          # la extension Multi-Share persiste selecciones: limpiar
-            if r:
-                click(r["x"], r["y"])
-                sleep(900)
-                r2 = cdp(JS_RESET)     # por si hay un cuadro de confirmacion
-                if r2:
-                    click(r2["x"], r2["y"])
-                    sleep(600)
-            return True
+    if cdp(JS_PICKER):
+        return True
+    for _ in range(10):
         g = cdp(JS_GROUP_OPTION)
         if g:
             click(g["x"], g["y"])
-            sleep(1600)
-            if cdp(JS_PICKER):
-                r = cdp(JS_RESET)
+            if wait_js(JS_PICKER, 16, 0.6):
+                r = cdp(JS_RESET)      # la extension Multi-Share persiste selecciones: limpiar
                 if r:
                     click(r["x"], r["y"])
                     sleep(900)
@@ -216,20 +241,30 @@ def open_group_option():
     return bool(cdp(JS_PICKER))
 
 
-def search_and_select(name):
-    p = cdp(JS_PICKER)
-    if not p:
-        return False
-    click(p["x"], p["y"])           # focus search input
-    sleep(300)
+def _type_search(name):
     cdp(JS_CLEAR_ACTIVE)            # limpia (native setter + input event)
     call("cdptype", {"tabId": TAB, "text": name})
     time.sleep(1.6)
-    for _ in range(8):
+    v = cdp(JS_PICKER_VALUE) or ""
+    return len(v) > 0
+
+
+def search_and_select(name):
+    p = wait_js(JS_PICKER, 12, 0.6)  # JS_PICKER ya hace scrollIntoView + focus
+    if not p:
+        return False
+    sleep(250)
+    if not _type_search(name):
+        wait_js(JS_PICKER, 4, 0.5)
+        _type_search(name)
+    for _ in range(18):
         row = cdp(js_select_row(name))
         if row:
             click(row["x"], row["y"])
-            sleep(1500)
+            for _ in range(12):     # avanzar = aparece el boton Publicar del paso final
+                sleep(500)
+                if cdp(JS_SUBMIT):
+                    return True
             return True
         time.sleep(0.8)
     return False
@@ -258,10 +293,53 @@ def submit(dry, text=""):
 def close_dialog():
     for _ in range(3):
         call("cdpkey", {"tabId": TAB, "key": "Escape"})
+        call("cdp", {"tabId": TAB, "method": "Page.handleJavaScriptDialog", "params": {"accept": True}})
         sleep(600)
         if not cdp(JS_SUBMIT):
             return True
     return False
+
+
+def clear_draft():
+    cdp("(()=>{try{for(const e of document.querySelectorAll('[contenteditable=true]'))"
+        "{try{e.focus();e.innerHTML='';e.dispatchEvent(new InputEvent('input',{bubbles:true}));}catch(_){}}"
+        "if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();}catch(_){}return 1;})()")
+
+
+def goto(url):
+    call("cdp", {"tabId": TAB, "method": "Page.handleJavaScriptDialog", "params": {"accept": True}})
+    clear_draft()
+    call("cdpkey", {"tabId": TAB, "key": "Escape"})
+    sleep(300)
+    call("cdp", {"tabId": TAB, "method": "Page.navigate", "params": {"url": url}})
+    for _ in range(40):
+        call("cdp", {"tabId": TAB, "method": "Page.handleJavaScriptDialog", "params": {"accept": True}})
+        try:
+            st = cdp("document.readyState")
+        except Exception:
+            st = None
+        if st == "complete":
+            break
+        sleep(400)
+    sleep(800)
+
+
+def share_one(g, dry, text=""):
+    for _ in range(3):
+        if not open_share():
+            close_dialog()
+            sleep(1500)
+            continue
+        if not open_group_option():
+            close_dialog()
+            sleep(1500)
+            continue
+        if not search_and_select(g):
+            close_dialog()
+            sleep(1500)
+            continue
+        return submit(dry, text)
+    return {"ok": False, "stage": "retry-exhausted"}
 
 
 def delay_seconds(base):
@@ -335,25 +413,15 @@ def run_from_cmd(path):
 
     ensure_tab()
     if url:
-        call("navigate", {"tabId": TAB, "url": url, "timeout": 45000})
-        sleep(4000)
+        goto(url)
     for i, g in enumerate(groups):
         st["current"] = g
         st["done"] = i
         write_status(st)
         step = {"group": g}
-        if not open_share():
-            step.update(ok=False, stage="share-button")
-        elif not open_group_option():
-            step.update(ok=False, stage="group-option")
-            close_dialog()
-        elif not search_and_select(g):
-            step.update(ok=False, stage="select")
-            close_dialog()
-        else:
-            step.update(submit(dry, text))
-            if step.get("ok") and not dry:
-                st["published"] = st.get("published", 0) + 1
+        step.update(share_one(g, dry, text))
+        if step.get("ok") and not dry:
+            st["published"] = st.get("published", 0) + 1
         st["results"].append(step)
         st["done"] = i + 1
         write_status(st)
@@ -381,29 +449,13 @@ def main():
         sys.exit("usa --ids o --cmd")
     ensure_tab()
     if a.url:
-        call("navigate", {"tabId": TAB, "url": a.url, "timeout": 45000})
-        sleep(4000)
+        goto(a.url)
     groups = [g.strip() for g in a.ids.split(",") if g.strip()]
     results = []
     for i, g in enumerate(groups):
         print(f"[{i+1}/{len(groups)}] {g}")
         step = {"group": g}
-        if not open_share():
-            step.update(ok=False, stage="share-button")
-            results.append(step)
-            continue
-        if not open_group_option():
-            step.update(ok=False, stage="group-option")
-            close_dialog()
-            results.append(step)
-            continue
-        if not search_and_select(g):
-            step.update(ok=False, stage="select")
-            close_dialog()
-            results.append(step)
-            continue
-        r = submit(a.dry, a.text)
-        step.update(r)
+        step.update(share_one(g, a.dry, a.text))
         results.append(step)
         if i < len(groups) - 1:
             close_dialog()
