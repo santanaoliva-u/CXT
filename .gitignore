@@ -34,3 +34,6 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+comment_status.json
+comment.cmd.json
+commented.json

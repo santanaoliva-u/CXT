@@ -291,7 +291,7 @@ def select_groups(ids, filt, limit):
     out = []
     for g in load_groups():
         n = _norm(g.get("name", ""))
-        if all(k in n for k in kws):
+        if any(k in n for k in kws):
             out.append(g.get("name") or g.get("id"))
     if limit and limit > 0:
         out = out[:limit]

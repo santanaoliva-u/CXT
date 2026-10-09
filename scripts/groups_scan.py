@@ -1,10 +1,25 @@
 import json, os, subprocess, sys, time, unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CXT = os.environ.get("CXT_BIN") or os.path.join(os.path.dirname(HERE), "bin", "cxt")
-TAB = int(os.environ["CXT_TAB"])
+CXT = os.path.join(HERE, "bin", "cxt")
 OUT = os.path.join(HERE, "groups.json")
 URL = "https://www.facebook.com/groups/joins/?nav_source=tab&ordering=viewer_added"
+
+
+def _resolve_tab():
+    if os.environ.get("CXT_TAB"):
+        return int(os.environ["CXT_TAB"])
+    try:
+        out = subprocess.check_output([CXT, "tabs"]).decode()
+        for t in json.loads(out):
+            if "facebook.com" in (t.get("url") or ""):
+                return int(t["id"])
+    except Exception:
+        pass
+    return None
+
+
+TAB = _resolve_tab()
 
 PASS_JS = r"""
 (async () => {

@@ -963,5 +963,57 @@ chrome.runtime.onMessage.addListener((msg, _s, send) => {
     });
     return true;
   }
+  if (msg && msg.type === "commentGet") {
+    cfg().then(async (c) => {
+      try {
+        const r = await fetch(c.server + "/comment" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), { cache: "no-store" });
+        send(await r.json());
+      } catch (e) {
+        send({ ok: false, error: String(e) });
+      }
+    });
+    return true;
+  }
+  if (msg && msg.type === "commentSet") {
+    cfg().then(async (c) => {
+      try {
+        const r = await fetch(c.server + "/comment" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(msg.value || {}),
+        });
+        send(await r.json());
+      } catch (e) {
+        send({ ok: false, error: String(e) });
+      }
+    });
+    return true;
+  }
+  if (msg && msg.type === "groupscanGet") {
+    cfg().then(async (c) => {
+      try {
+        const r = await fetch(c.server + "/groupscan" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), { cache: "no-store" });
+        send(await r.json());
+      } catch (e) {
+        send({ ok: false, error: String(e) });
+      }
+    });
+    return true;
+  }
+  if (msg && msg.type === "groupscanSet") {
+    cfg().then(async (c) => {
+      try {
+        const r = await fetch(c.server + "/groupscan" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(msg.value || {}),
+        });
+        send(await r.json());
+      } catch (e) {
+        send({ ok: false, error: String(e) });
+      }
+    });
+    return true;
+  }
 });
 init();

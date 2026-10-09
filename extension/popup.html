@@ -86,6 +86,37 @@
       <button id="pstop" class="ghost">DETENER</button>
     </div>
     <div id="pstatus">—</div>
+    <hr />
+    <h2>Comentar</h2>
+    <label>Enlace (vacío = post visible)</label>
+    <input id="curl" type="text" placeholder="https://www.facebook.com/..." />
+    <label>Modo</label>
+    <select id="cmode">
+      <option value="auto">auto (frase breve)</option>
+      <option value="fixed">texto fijo (abajo)</option>
+    </select>
+    <textarea id="ctext" placeholder="Texto del comentario (si eliges 'texto fijo')"></textarea>
+    <label>Intervalo</label>
+    <select id="cint">
+      <option value="0">una vez</option>
+      <option value="3">cada 3 min</option>
+      <option value="5">cada 5 min</option>
+      <option value="10">cada 10 min</option>
+    </select>
+    <label>Cantidad</label>
+    <input id="ccount" type="number" min="1" value="1" />
+    <label><input type="checkbox" id="cdry" checked style="width:auto" /> Simulación (no publica)</label>
+    <div class="row">
+      <button id="cstart">COMENTAR</button>
+      <button id="cstop" class="ghost">DETENER</button>
+    </div>
+    <div id="cstatus">—</div>
+    <hr />
+    <h2>Grupos</h2>
+    <div class="row">
+      <button id="grscan">ESCANEAR GRUPOS</button>
+    </div>
+    <div id="grstatus">—</div>
     <script src="popup.js"></script>
   </body>
 </html>

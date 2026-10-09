@@ -11,6 +11,8 @@ async function load() {
   renderSched();
   renderShare();
   renderSharePost();
+  renderComment();
+  renderGroups();
 }
 
 function paint() {
@@ -156,5 +158,63 @@ $("pstop").addEventListener("click", async () => {
   setTimeout(renderSharePost, 900);
 });
 
+async function renderComment() {
+  const s = await chrome.runtime.sendMessage({ type: "commentGet" }).catch(() => null);
+  const el = $("cstatus");
+  if (!s || s.error) {
+    el.textContent = s && s.error ? "error: " + s.error : "sin datos";
+    return;
+  }
+  if (!s.total) {
+    el.textContent = s.running ? "iniciando…" : "sin ejecuciones";
+    return;
+  }
+  let t = `${s.running ? "COMENTANDO" : "terminado"} ${s.done || 0}/${s.total} · OK ${s.posted || 0}`;
+  if (s.dry) t += " · SIMULACIÓN";
+  if (s.error) t += `\n${s.error}`;
+  if (s.current) t += `\n${s.current}`;
+  el.textContent = t;
+}
+
+$("cstart").addEventListener("click", async () => {
+  const url = $("curl").value.trim();
+  const fixed = $("cmode").value === "fixed";
+  const text = fixed ? $("ctext").value.trim() : "";
+  const auto = !fixed;
+  const interval = parseFloat($("cint").value) || 0;
+  const count = Math.max(1, parseInt($("ccount").value) || 1);
+  const dry = $("cdry").checked;
+  if (fixed && !text) { $("cstatus").textContent = "escribe el comentario"; return; }
+  await chrome.runtime.sendMessage({ type: "commentSet", value: { url, text, auto, count, interval_min: interval, dry } }).catch(() => {});
+  $("cstatus").textContent = "iniciando…";
+  setTimeout(renderComment, 900);
+});
+
+$("cstop").addEventListener("click", async () => {
+  await chrome.runtime.sendMessage({ type: "commentSet", value: { stop: true } }).catch(() => {});
+  $("cstatus").textContent = "deteniendo…";
+  setTimeout(renderComment, 900);
+});
+
+async function renderGroups() {
+  const g = await chrome.runtime.sendMessage({ type: "groupscanGet" }).catch(() => null);
+  const el = $("grstatus");
+  if (!g || g.error) {
+    el.textContent = g && g.error ? "error: " + g.error : "sin datos";
+    return;
+  }
+  if (g.alive) { el.textContent = "escaneando… (tarda unos minutos)"; return; }
+  if (!g.count) { el.textContent = "sin grupos; pulsa ESCANEAR"; return; }
+  const c = g.categories || {};
+  const cats = Object.keys(c).map((k) => `${k}:${c[k]}`).join(" · ");
+  el.textContent = `${g.count} grupos\n${cats}`;
+}
+
+$("grscan").addEventListener("click", async () => {
+  await chrome.runtime.sendMessage({ type: "groupscanSet", value: {} }).catch(() => {});
+  $("grstatus").textContent = "escaneando…";
+  setTimeout(renderGroups, 1200);
+});
+
 load();
-setInterval(() => { render(); renderSched(); renderShare(); renderSharePost(); }, 2500);
+setInterval(() => { render(); renderSched(); renderShare(); renderSharePost(); renderComment(); renderGroups(); }, 2500);
