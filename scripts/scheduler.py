@@ -78,7 +78,7 @@ def gen_auto():
             pass
     out = ""
     try:
-        out = subprocess.run([NEWS, "Playa del Carmen", "8"], capture_output=True, text=True, timeout=60).stdout
+        out = subprocess.run([NEWS, CITY, "8"], capture_output=True, text=True, timeout=60).stdout
     except Exception as e:
         log("news err " + str(e))
     for title in [l.strip() for l in out.splitlines() if l.strip()]:
@@ -87,7 +87,7 @@ def gen_auto():
             used.append(t)
             write_json(USED, used[-500:])
             return random.choice(TEMPLATES).format(t=t) + "\n\n" + HASHTAGS
-    return "Buenos días, Playa del Carmen. 🌴 " + HASHTAGS
+    return "Buenos días, " + CITY + ". " + HASHTAGS
 
 
 def publish(text):
