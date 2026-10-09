@@ -7,20 +7,18 @@ CMD = os.path.join(DIR, "schedule.cmd.json")
 POOL = os.path.join(DIR, "pool.txt")
 USED = os.path.join(DIR, "used.json")
 PID = os.path.join(DIR, "scheduler.pid")
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CXT = os.environ.get("CXT_BIN") or os.path.join(ROOT, "bin", "cxt")
-PUB = os.path.join(ROOT, "scripts", "clone_publish.py")
-NEWS = os.path.join(ROOT, "scripts", "news.sh")
+CXT = os.path.join(DIR, "bin", "cxt")
+PUB = os.path.join(DIR, "clone_publish.py")
+NEWS = os.path.join(DIR, "news.sh")
 
-CITY = os.environ.get("CXT_CITY", "tu ciudad")
-HASHTAGS = os.environ.get("CXT_TAGS", "#Ciudad #Local")
 TEMPLATES = [
-    "Buenos días, " + CITY + ". {t}",
-    "Ojo, " + CITY + ": {t}",
-    "{t} — ¿Qué opinan?",
-    "Esto está pasando en " + CITY + ": {t}",
-    "{t}\n\nBuenas noticias para " + CITY + ".",
+    "Buenos días, Playa del Carmen. {t}",
+    "Ojo, Playa del Carmen: {t}",
+    "{t} — ¿Qué opinan? 🌴",
+    "Esto está pasando en Playa del Carmen: {t}",
+    "{t}\n\nBuenas noticias para Playa del Carmen. 🌴",
 ]
+HASHTAGS = "#PlayaDelCarmen #RivieraMaya #QuintanaRoo"
 
 
 def log(msg):
@@ -68,7 +66,8 @@ def gen_auto():
     used = read_json(USED, [])
     if os.path.exists(POOL):
         try:
-            lines = [l.strip() for l in open(POOL, encoding="utf-8") if l.strip()]
+            with open(POOL, encoding="utf-8") as f:
+                lines = [l.strip() for l in f if l.strip()]
             for l in lines:
                 if l not in used:
                     used.append(l)
@@ -78,7 +77,7 @@ def gen_auto():
             pass
     out = ""
     try:
-        out = subprocess.run([NEWS, CITY, "8"], capture_output=True, text=True, timeout=60).stdout
+        out = subprocess.run([NEWS, "Playa del Carmen", "8"], capture_output=True, text=True, timeout=60).stdout
     except Exception as e:
         log("news err " + str(e))
     for title in [l.strip() for l in out.splitlines() if l.strip()]:
@@ -87,7 +86,7 @@ def gen_auto():
             used.append(t)
             write_json(USED, used[-500:])
             return random.choice(TEMPLATES).format(t=t) + "\n\n" + HASHTAGS
-    return "Buenos días, " + CITY + ". " + HASHTAGS
+    return "Buenos días, Playa del Carmen. 🌴 " + HASHTAGS
 
 
 def publish(text):
@@ -134,13 +133,15 @@ def apply_cmd(cfg):
 def main():
     if os.path.exists(PID):
         try:
-            old = int(open(PID).read().strip())
+            with open(PID) as f:
+                old = int(f.read().strip())
             os.kill(old, 0)
             log("ya hay un scheduler vivo pid=" + str(old))
             return
         except Exception:
             pass
-    open(PID, "w").write(str(os.getpid()))
+    with open(PID, "w") as f:
+        f.write(str(os.getpid()))
     log("scheduler arranca pid=" + str(os.getpid()))
     while True:
         try:

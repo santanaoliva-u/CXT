@@ -3,7 +3,11 @@ import os, sys, json, tempfile, threading, time
 HOME = tempfile.mkdtemp()
 os.environ["HOME"] = HOME
 os.makedirs(os.path.join(HOME, ".cxt"), exist_ok=True)
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "scripts"))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in (_HERE, os.path.join(_HERE, "..", "scripts")):
+    if os.path.exists(os.path.join(_p, "scheduler.py")):
+        sys.path.insert(0, _p)
+        break
 import scheduler as S  # noqa: E402
 
 S.publish = lambda text: {"ok": True}
@@ -17,7 +21,8 @@ with open(S.CFG, "w") as f:
 threading.Thread(target=S.main, daemon=True).start()
 time.sleep(3)
 
-m = json.load(open(S.CFG))
+with open(S.CFG) as f:
+    m = json.load(f)
 ok = (m.get("enabled") is False and int(m.get("remaining", 1)) == 0
       and isinstance(m.get("last"), dict) and m["last"].get("ok") is True)
 print(json.dumps(m))

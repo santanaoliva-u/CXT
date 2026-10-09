@@ -18,8 +18,11 @@ def resolve_cxt():
 
 
 def call(cxt, op, args=None, timeout=120):
-    p = subprocess.run([cxt, op, json.dumps(args or {})],
-                       capture_output=True, text=True, timeout=timeout)
+    try:
+        p = subprocess.run([cxt, op, json.dumps(args or {})],
+                           capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "_err": "timeout tras %ss en op %s" % (timeout, op)}
     out = (p.stdout or "").strip()
     try:
         return json.loads(out)

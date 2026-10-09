@@ -55,7 +55,8 @@ def ensure_groups():
 
 def select_groups(ids, filters):
     ensure_groups()
-    data = json.load(open(GJ, encoding="utf-8"))
+    with open(GJ, encoding="utf-8") as f:
+        data = json.load(f)
     groups = data["groups"]
     if ids:
         return [g for g in groups if g["id"] in ids]
@@ -176,7 +177,8 @@ def post_to_group(g, text, dry=False):
 
 def write_status(st):
     tmp = STATUS + ".tmp"
-    json.dump(st, open(tmp, "w", encoding="utf-8"), ensure_ascii=False)
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(st, f, ensure_ascii=False)
     os.replace(tmp, STATUS)
 
 
@@ -220,9 +222,11 @@ def job(cmd):
 def main():
     if "--cmd" in sys.argv:
         p = sys.argv.index("--cmd")
-        job(json.load(open(sys.argv[p + 1], encoding="utf-8")))
+        with open(sys.argv[p + 1], encoding="utf-8") as f:
+            job(json.load(f))
         return
-    data = json.load(open(GJ, encoding="utf-8"))
+    with open(GJ, encoding="utf-8") as f:
+        data = json.load(f)
     if "--list" in sys.argv:
         flt = []
         if "--filter" in sys.argv:

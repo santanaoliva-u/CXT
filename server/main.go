@@ -84,6 +84,12 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
+func (s *server) extensionOnline() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.lastPoll.IsZero() && time.Since(s.lastPoll) < 30*time.Second
+}
+
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if !s.auth(w, r) {
 		return
@@ -96,11 +102,11 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"ok": true, "version": "0.1.0", "extension_online": online, "enabled": enabled,
 		"sched_alive": schedulerAlive(), "sched_enabled": sch["enabled"], "sched_remaining": sch["remaining"],
-		"share_alive": sharerAlive(),
+		"share_alive":      sharerAlive(),
 		"share_post_alive": sharePostAlive(),
-		"comment_alive": commentAlive(),
-		"groupscan_alive": groupsScanAlive(),
-		"scripts_ok": allScriptsOK(),
+		"comment_alive":    commentAlive(),
+		"groupscan_alive":  groupsScanAlive(),
+		"scripts_ok":       allScriptsOK(),
 	})
 }
 
@@ -122,41 +128,14 @@ func (s *server) handleState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]bool{"ok": true, "enabled": st.Enabled})
 }
 
+// ---- scheduler ----
+
 func schedulePath() string    { return filepath.Join(cxtDir(), "schedule.json") }
 func scheduleCmdPath() string { return filepath.Join(cxtDir(), "schedule.cmd.json") }
 
-func readSchedule() map[string]any {
-	b, err := os.ReadFile(schedulePath())
-	if err != nil {
-		return map[string]any{}
-	}
-	var m map[string]any
-	if json.Unmarshal(b, &m) != nil {
-		return map[string]any{}
-	}
-	return m
-}
-
-// procRunning: true solo si el pidfile apunta a un proceso vivo cuyo cmdline
-// contiene marker (evita falsos positivos por zombies o pids reutilizados).
-func procRunning(pidFile, marker string) bool {
-	b, err := os.ReadFile(filepath.Join(cxtDir(), pidFile))
-	if err != nil {
-		return false
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil || pid <= 0 {
-		return false
-	}
-	cb, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(cb), marker)
-}
+func readSchedule() map[string]any { return readJSONMap("schedule.json") }
 
 func schedulerAlive() bool { return procRunning("scheduler.pid", "scheduler.py") }
-
 
 func ensureScheduler() {
 	if schedulerAlive() {
@@ -166,13 +145,7 @@ func ensureScheduler() {
 	if _, err := os.Stat(script); err != nil {
 		return
 	}
-	cmd := exec.Command("setsid", "python3", script)
-	logf, _ := os.OpenFile("/tmp/cxt_sched.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if logf != nil {
-		cmd.Stdout = logf
-		cmd.Stderr = logf
-	}
-	if err := cmd.Start(); err != nil {
+	if _, err := startDetached(script, "/tmp/cxt_sched.log"); err != nil {
 		log.Printf("no se pudo arrancar scheduler: %v", err)
 	}
 }
@@ -204,12 +177,36 @@ func (s *server) handleScheduleSet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true, "pending": true, "alive": schedulerAlive()})
 }
 
-func shareStatusPath() string { return filepath.Join(cxtDir(), "share_status.json") }
-func shareCmdPath() string    { return filepath.Join(cxtDir(), "share.cmd.json") }
-func sharePidPath() string    { return filepath.Join(cxtDir(), "share.pid") }
+// ---- generic job plumbing ----
+//
+// Los jobs (compartir en grupos, compartir publicacion, comentar, escanear
+// grupos) comparten el mismo ciclo de vida: un JSON de estado, un archivo de
+// comando, un pid y un log. jobSpec los describe y get/set implementan el
+// handler una sola vez.
 
-func readShareStatus() map[string]any {
-	b, err := os.ReadFile(shareStatusPath())
+// procRunning: true solo si el pidfile apunta a un proceso vivo cuyo cmdline
+// contiene marker (evita falsos positivos por zombies o pids reutilizados).
+func procRunning(pidFile, marker string) bool {
+	b, err := os.ReadFile(filepath.Join(cxtDir(), pidFile))
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || pid <= 0 {
+		return false
+	}
+	cb, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(cb), marker)
+}
+
+func readJSONMap(name string) map[string]any {
+	if name == "" {
+		return map[string]any{}
+	}
+	b, err := os.ReadFile(filepath.Join(cxtDir(), name))
 	if err != nil {
 		return map[string]any{}
 	}
@@ -228,246 +225,195 @@ func readPid(path string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(string(b)))
 }
 
-func sharerAlive() bool { return procRunning("share.pid", "groups_share.py") }
+func stopJob(pidFile string) {
+	if pid, err := readPid(filepath.Join(cxtDir(), pidFile)); err == nil {
+		_ = syscall.Kill(pid, syscall.SIGTERM)
+	}
+	_ = os.Remove(filepath.Join(cxtDir(), pidFile))
+}
+
+// startDetached lanza `setsid python3 <script> [args...]` con la salida al log
+// indicado y devuelve el pid. El daemon no espera al hijo (lo reapea el SO).
+func startDetached(script, logPath string, args ...string) (int, error) {
+	argv := append([]string{"python3", script}, args...)
+	cmd := exec.Command("setsid", argv...)
+	var logf *os.File
+	if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+		logf = f
+		cmd.Stdout, cmd.Stderr = f, f
+	}
+	if err := cmd.Start(); err != nil {
+		if logf != nil {
+			_ = logf.Close()
+		}
+		return 0, err
+	}
+	if logf != nil {
+		_ = logf.Close()
+	}
+	return cmd.Process.Pid, nil
+}
+
+type jobSpec struct {
+	label   string // "comentario" -> "ya hay un comentario en curso"
+	script  string // archivo del script en cxtDir()
+	status  string // JSON de estado ("" si no aplica)
+	cmd     string // JSON de comando ("" si el script no usa --cmd)
+	pid     string // pidfile
+	log     string // ruta del log
+	extra   []string
+	summary func(map[string]any) // campos extra para el GET
+}
+
+func (j jobSpec) alive() bool { return procRunning(j.pid, j.script) }
+
+func (j jobSpec) get(w http.ResponseWriter) {
+	m := readJSONMap(j.status)
+	m["alive"] = j.alive()
+	if j.summary != nil {
+		j.summary(m)
+	}
+	writeJSON(w, 200, m)
+}
+
+func (j jobSpec) set(w http.ResponseWriter, r *http.Request) {
+	var st map[string]any
+	if j.cmd != "" {
+		if err := json.NewDecoder(r.Body).Decode(&st); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+	} else {
+		_ = json.NewDecoder(r.Body).Decode(&st)
+	}
+	if st == nil {
+		st = map[string]any{}
+	}
+	if b, ok := st["stop"].(bool); ok && b {
+		stopJob(j.pid)
+		writeJSON(w, 200, map[string]any{"ok": true, "stopped": true})
+		return
+	}
+	if j.alive() {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": "ya hay un " + j.label + " en curso"})
+		return
+	}
+	args := j.extra
+	if j.cmd != "" {
+		b, _ := json.Marshal(st)
+		cmdPath := filepath.Join(cxtDir(), j.cmd)
+		if err := os.WriteFile(cmdPath, b, 0o644); err != nil {
+			http.Error(w, "no se pudo escribir", http.StatusInternalServerError)
+			return
+		}
+		args = []string{"--cmd", cmdPath}
+	}
+	pid, err := startDetached(filepath.Join(cxtDir(), j.script), j.log, args...)
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	_ = os.WriteFile(filepath.Join(cxtDir(), j.pid), []byte(strconv.Itoa(pid)), 0o644)
+	writeJSON(w, 200, map[string]any{"ok": true, "started": true, "pid": pid})
+}
+
+var (
+	shareSpec = jobSpec{
+		label: "share", script: "groups_share.py", status: "share_status.json",
+		cmd: "share.cmd.json", pid: "share.pid", log: "/tmp/cxt_share.log",
+	}
+	sharePostSpec = jobSpec{
+		label: "share de publicacion", script: "share_post.py", status: "share_post_status.json",
+		cmd: "share_post.cmd.json", pid: "share_post.pid", log: "/tmp/cxt_share_post.log",
+	}
+	commentSpec = jobSpec{
+		label: "comentario", script: "comment.py", status: "comment_status.json",
+		cmd: "comment.cmd.json", pid: "comment.pid", log: "/tmp/cxt_comment.log",
+	}
+	groupsScanSpec = jobSpec{
+		label: "escaneo", script: "groups_scan.py", pid: "groups_scan.pid",
+		log: "/tmp/cxt_groupscan.log", extra: []string{"--reset"},
+		summary: func(m map[string]any) {
+			if g, ok := loadGroupsJSON(); ok {
+				m["scanned_at"], m["count"], m["categories"] = g["scanned_at"], g["count"], g["categories"]
+			}
+		},
+	}
+)
+
+func sharerAlive() bool     { return shareSpec.alive() }
+func sharePostAlive() bool  { return sharePostSpec.alive() }
+func commentAlive() bool    { return commentSpec.alive() }
+func groupsScanAlive() bool { return groupsScanSpec.alive() }
 
 func (s *server) handleShareGet(w http.ResponseWriter, r *http.Request) {
 	if !s.auth(w, r) {
 		return
 	}
-	m := readShareStatus()
-	m["alive"] = sharerAlive()
-	writeJSON(w, 200, m)
+	shareSpec.get(w)
 }
 
 func (s *server) handleShareSet(w http.ResponseWriter, r *http.Request) {
 	if !s.auth(w, r) {
 		return
 	}
-	var st map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&st); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	if b, ok := st["stop"].(bool); ok && b {
-		if pid, err := readPid(sharePidPath()); err == nil {
-			_ = syscall.Kill(pid, syscall.SIGTERM)
-		}
-		_ = os.Remove(sharePidPath())
-		writeJSON(w, 200, map[string]any{"ok": true, "stopped": true})
-		return
-	}
-	if sharerAlive() {
-		writeJSON(w, 200, map[string]any{"ok": false, "error": "ya hay un share en curso"})
-		return
-	}
-	b, _ := json.Marshal(st)
-	if err := os.WriteFile(shareCmdPath(), b, 0o644); err != nil {
-		http.Error(w, "no se pudo escribir", http.StatusInternalServerError)
-		return
-	}
-	script := filepath.Join(cxtDir(), "groups_share.py")
-	cmd := exec.Command("setsid", "python3", script, "--cmd", shareCmdPath())
-	logf, _ := os.OpenFile("/tmp/cxt_share.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if logf != nil {
-		cmd.Stdout = logf
-		cmd.Stderr = logf
-	}
-	if err := cmd.Start(); err != nil {
-		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	os.WriteFile(sharePidPath(), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644)
-	writeJSON(w, 200, map[string]any{"ok": true, "started": true, "pid": cmd.Process.Pid})
+	shareSpec.set(w, r)
 }
-
-func sharePostStatusPath() string { return filepath.Join(cxtDir(), "share_post_status.json") }
-func sharePostCmdPath() string    { return filepath.Join(cxtDir(), "share_post.cmd.json") }
-func sharePostPidPath() string    { return filepath.Join(cxtDir(), "share_post.pid") }
-
-func readSharePostStatus() map[string]any {
-	b, err := os.ReadFile(sharePostStatusPath())
-	if err != nil {
-		return map[string]any{}
-	}
-	var m map[string]any
-	if json.Unmarshal(b, &m) != nil {
-		return map[string]any{}
-	}
-	return m
-}
-
-func sharePostAlive() bool { return procRunning("share_post.pid", "share_post.py") }
 
 func (s *server) handleSharePostGet(w http.ResponseWriter, r *http.Request) {
 	if !s.auth(w, r) {
 		return
 	}
-	m := readSharePostStatus()
-	m["alive"] = sharePostAlive()
-	writeJSON(w, 200, m)
+	sharePostSpec.get(w)
 }
 
 func (s *server) handleSharePostSet(w http.ResponseWriter, r *http.Request) {
 	if !s.auth(w, r) {
 		return
 	}
-	var st map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&st); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	if b, ok := st["stop"].(bool); ok && b {
-		if pid, err := readPid(sharePostPidPath()); err == nil {
-			_ = syscall.Kill(pid, syscall.SIGTERM)
-		}
-		_ = os.Remove(sharePostPidPath())
-		writeJSON(w, 200, map[string]any{"ok": true, "stopped": true})
-		return
-	}
-	if sharePostAlive() {
-		writeJSON(w, 200, map[string]any{"ok": false, "error": "ya hay un share de publicacion en curso"})
-		return
-	}
-	b, _ := json.Marshal(st)
-	if err := os.WriteFile(sharePostCmdPath(), b, 0o644); err != nil {
-		http.Error(w, "no se pudo escribir", http.StatusInternalServerError)
-		return
-	}
-	script := filepath.Join(cxtDir(), "share_post.py")
-	cmd := exec.Command("setsid", "python3", script, "--cmd", sharePostCmdPath())
-	logf, _ := os.OpenFile("/tmp/cxt_share_post.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if logf != nil {
-		cmd.Stdout = logf
-		cmd.Stderr = logf
-	}
-	if err := cmd.Start(); err != nil {
-		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	os.WriteFile(sharePostPidPath(), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644)
-	writeJSON(w, 200, map[string]any{"ok": true, "started": true, "pid": cmd.Process.Pid})
+	sharePostSpec.set(w, r)
 }
-
-func commentStatusPath() string { return filepath.Join(cxtDir(), "comment_status.json") }
-func commentCmdPath() string    { return filepath.Join(cxtDir(), "comment.cmd.json") }
-func commentPidPath() string    { return filepath.Join(cxtDir(), "comment.pid") }
-
-func readCommentStatus() map[string]any {
-	b, err := os.ReadFile(commentStatusPath())
-	if err != nil {
-		return map[string]any{}
-	}
-	var m map[string]any
-	if json.Unmarshal(b, &m) != nil {
-		return map[string]any{}
-	}
-	return m
-}
-
-func commentAlive() bool { return procRunning("comment.pid", "comment.py") }
 
 func (s *server) handleCommentGet(w http.ResponseWriter, r *http.Request) {
 	if !s.auth(w, r) {
 		return
 	}
-	m := readCommentStatus()
-	m["alive"] = commentAlive()
-	writeJSON(w, 200, m)
+	commentSpec.get(w)
 }
 
 func (s *server) handleCommentSet(w http.ResponseWriter, r *http.Request) {
 	if !s.auth(w, r) {
 		return
 	}
-	var st map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&st); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	if b, ok := st["stop"].(bool); ok && b {
-		if pid, err := readPid(commentPidPath()); err == nil {
-			_ = syscall.Kill(pid, syscall.SIGTERM)
-		}
-		_ = os.Remove(commentPidPath())
-		writeJSON(w, 200, map[string]any{"ok": true, "stopped": true})
-		return
-	}
-	if commentAlive() {
-		writeJSON(w, 200, map[string]any{"ok": false, "error": "ya hay un comentario en curso"})
-		return
-	}
-	b, _ := json.Marshal(st)
-	if err := os.WriteFile(commentCmdPath(), b, 0o644); err != nil {
-		http.Error(w, "no se pudo escribir", http.StatusInternalServerError)
-		return
-	}
-	script := filepath.Join(cxtDir(), "comment.py")
-	cmd := exec.Command("setsid", "python3", script, "--cmd", commentCmdPath())
-	logf, _ := os.OpenFile("/tmp/cxt_comment.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if logf != nil {
-		cmd.Stdout = logf
-		cmd.Stderr = logf
-	}
-	if err := cmd.Start(); err != nil {
-		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	os.WriteFile(commentPidPath(), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644)
-	writeJSON(w, 200, map[string]any{"ok": true, "started": true, "pid": cmd.Process.Pid})
+	commentSpec.set(w, r)
 }
-
-func groupsScanPidPath() string { return filepath.Join(cxtDir(), "groups_scan.pid") }
-
-func groupsScanAlive() bool { return procRunning("groups_scan.pid", "groups_scan.py") }
 
 func (s *server) handleGroupScanGet(w http.ResponseWriter, r *http.Request) {
 	if !s.auth(w, r) {
 		return
 	}
-	m := map[string]any{"alive": groupsScanAlive()}
-	b, err := os.ReadFile(filepath.Join(cxtDir(), "groups.json"))
-	if err == nil {
-		var g map[string]any
-		if json.Unmarshal(b, &g) == nil {
-			m["scanned_at"] = g["scanned_at"]
-			m["count"] = g["count"]
-			m["categories"] = g["categories"]
-		}
-	}
-	writeJSON(w, 200, m)
+	groupsScanSpec.get(w)
 }
 
 func (s *server) handleGroupScanSet(w http.ResponseWriter, r *http.Request) {
 	if !s.auth(w, r) {
 		return
 	}
-	var st map[string]any
-	_ = json.NewDecoder(r.Body).Decode(&st)
-	if b, ok := st["stop"].(bool); ok && b {
-		if pid, err := readPid(groupsScanPidPath()); err == nil {
-			_ = syscall.Kill(pid, syscall.SIGTERM)
-		}
-		_ = os.Remove(groupsScanPidPath())
-		writeJSON(w, 200, map[string]any{"ok": true, "stopped": true})
-		return
+	groupsScanSpec.set(w, r)
+}
+
+// ---- diagnostics ----
+
+func loadGroupsJSON() (map[string]any, bool) {
+	b, err := os.ReadFile(filepath.Join(cxtDir(), "groups.json"))
+	if err != nil {
+		return nil, false
 	}
-	if groupsScanAlive() {
-		writeJSON(w, 200, map[string]any{"ok": false, "error": "ya hay un escaneo en curso"})
-		return
+	var g map[string]any
+	if json.Unmarshal(b, &g) != nil {
+		return nil, false
 	}
-	script := filepath.Join(cxtDir(), "groups_scan.py")
-	cmd := exec.Command("setsid", "python3", script, "--reset")
-	logf, _ := os.OpenFile("/tmp/cxt_groupscan.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if logf != nil {
-		cmd.Stdout = logf
-		cmd.Stderr = logf
-	}
-	if err := cmd.Start(); err != nil {
-		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	os.WriteFile(groupsScanPidPath(), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644)
-	writeJSON(w, 200, map[string]any{"ok": true, "started": true, "pid": cmd.Process.Pid})
+	return g, true
 }
 
 func (s *server) handleSelfTest(w http.ResponseWriter, r *http.Request) {
@@ -479,12 +425,9 @@ func (s *server) handleSelfTest(w http.ResponseWriter, r *http.Request) {
 	enabled := s.extEnabled
 	s.mu.Unlock()
 	gc := 0
-	if b, err := os.ReadFile(filepath.Join(cxtDir(), "groups.json")); err == nil {
-		var g map[string]any
-		if json.Unmarshal(b, &g) == nil {
-			if n, ok := g["count"].(float64); ok {
-				gc = int(n)
-			}
+	if g, ok := loadGroupsJSON(); ok {
+		if n, ok := g["count"].(float64); ok {
+			gc = int(n)
 		}
 	}
 	writeJSON(w, 200, map[string]any{
@@ -508,6 +451,8 @@ func (s *server) handleStat(w http.ResponseWriter, r *http.Request) {
 	online := !last.IsZero() && time.Since(last) < 30*time.Second
 	writeJSON(w, 200, map[string]any{"queued": len(s.queue), "pending": pending, "extension_online": online, "last_poll_ms": last.UnixMilli()})
 }
+
+// ---- extension transport ----
 
 func (s *server) handleNext(w http.ResponseWriter, r *http.Request) {
 	if !s.auth(w, r) {
@@ -647,6 +592,16 @@ func allScriptsOK() bool {
 	return true
 }
 
+func jobRoute(get, set http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			set(w, r)
+		} else {
+			get(w, r)
+		}
+	}
+}
+
 func main() {
 	token := os.Getenv("CXT_TOKEN")
 	tokenPath := filepath.Join(cxtDir(), "token")
@@ -668,41 +623,11 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/state", s.handleState)
-	mux.HandleFunc("/schedule", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			s.handleScheduleSet(w, r)
-		} else {
-			s.handleScheduleGet(w, r)
-		}
-	})
-	mux.HandleFunc("/sharegroups", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			s.handleShareSet(w, r)
-		} else {
-			s.handleShareGet(w, r)
-		}
-	})
-	mux.HandleFunc("/sharepost", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			s.handleSharePostSet(w, r)
-		} else {
-			s.handleSharePostGet(w, r)
-		}
-	})
-	mux.HandleFunc("/comment", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			s.handleCommentSet(w, r)
-		} else {
-			s.handleCommentGet(w, r)
-		}
-	})
-	mux.HandleFunc("/groupscan", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			s.handleGroupScanSet(w, r)
-		} else {
-			s.handleGroupScanGet(w, r)
-		}
-	})
+	mux.HandleFunc("/schedule", jobRoute(s.handleScheduleGet, s.handleScheduleSet))
+	mux.HandleFunc("/sharegroups", jobRoute(s.handleShareGet, s.handleShareSet))
+	mux.HandleFunc("/sharepost", jobRoute(s.handleSharePostGet, s.handleSharePostSet))
+	mux.HandleFunc("/comment", jobRoute(s.handleCommentGet, s.handleCommentSet))
+	mux.HandleFunc("/groupscan", jobRoute(s.handleGroupScanGet, s.handleGroupScanSet))
 	mux.HandleFunc("/selftest", s.handleSelfTest)
 	mux.HandleFunc("/stat", s.handleStat)
 	mux.HandleFunc("/next", s.handleNext)

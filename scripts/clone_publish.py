@@ -61,7 +61,8 @@ def wait_for(text, tries=30, interval=0.3, minw=60, lo=18, hi=90, exact=False):
     return None
 
 
-text = open(sys.argv[1], encoding="utf-8").read().strip()
+with open(sys.argv[1], encoding="utf-8") as f:
+    text = f.read().strip()
 assert text, "post vacio"
 
 t0 = time.time()

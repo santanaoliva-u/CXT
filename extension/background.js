@@ -851,169 +851,62 @@ chrome.alarms.create("cxt-poll", { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "cxt-poll") loop();
 });
+const API = {
+  test: { path: "/health" },
+  schedGet: { path: "/schedule" },
+  schedSet: { path: "/schedule", method: "POST" },
+  shareGet: { path: "/sharegroups" },
+  shareSet: { path: "/sharegroups", method: "POST" },
+  sharePostGet: { path: "/sharepost" },
+  sharePostSet: { path: "/sharepost", method: "POST" },
+  commentGet: { path: "/comment" },
+  commentSet: { path: "/comment", method: "POST" },
+  groupscanGet: { path: "/groupscan" },
+  groupscanSet: { path: "/groupscan", method: "POST" },
+};
 chrome.runtime.onMessage.addListener((msg, _s, send) => {
-  if (msg && msg.type === "status") {
-    cfg().then((c) =>
-      send({ running, enabled: c.enabled, server: c.server, hasToken: !!c.token })
-    );
+  if (!msg || !msg.type) return;
+  if (msg.type === "status") {
+    cfg()
+      .then((c) => send({ running, enabled: c.enabled, server: c.server, hasToken: !!c.token }))
+      .catch((e) => send({ running, error: String(e) }));
     return true;
   }
-  if (msg && msg.type === "start") {
+  if (msg.type === "start") {
     loop();
     send({ ok: true });
     return true;
   }
-  if (msg && msg.type === "setEnabled") {
+  if (msg.type === "setEnabled") {
     (async () => {
-      await chrome.storage.local.set({ enabled: !!msg.value });
-      const c = await cfg();
-      applyBadge(c.enabled);
-      await reportState(c);
-      if (c.enabled) loop();
-      send({ ok: true, enabled: c.enabled });
+      try {
+        await chrome.storage.local.set({ enabled: !!msg.value });
+        const c = await cfg();
+        applyBadge(c.enabled);
+        await reportState(c);
+        if (c.enabled) loop();
+        send({ ok: true, enabled: c.enabled });
+      } catch (e) {
+        send({ ok: false, error: String(e) });
+      }
     })();
     return true;
   }
-  if (msg && msg.type === "test") {
-    cfg().then(async (c) => {
-      try {
-        const r = await fetch(c.server + "/health" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""));
-        send({ ok: r.ok, status: r.status });
-      } catch (e) {
-        send({ ok: false, error: String(e) });
-      }
-    });
-    return true;
-  }
-  if (msg && msg.type === "schedGet") {
-    cfg().then(async (c) => {
-      try {
-        const r = await fetch(c.server + "/schedule" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), { cache: "no-store" });
-        send(await r.json());
-      } catch (e) {
-        send({ ok: false, error: String(e) });
-      }
-    });
-    return true;
-  }
-  if (msg && msg.type === "schedSet") {
-    cfg().then(async (c) => {
-      try {
-        const r = await fetch(c.server + "/schedule" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(msg.value || {}),
-        });
-        send(await r.json());
-      } catch (e) {
-        send({ ok: false, error: String(e) });
-      }
-    });
-    return true;
-  }
-  if (msg && msg.type === "shareGet") {
-    cfg().then(async (c) => {
-      try {
-        const r = await fetch(c.server + "/sharegroups" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), { cache: "no-store" });
-        send(await r.json());
-      } catch (e) {
-        send({ ok: false, error: String(e) });
-      }
-    });
-    return true;
-  }
-  if (msg && msg.type === "shareSet") {
-    cfg().then(async (c) => {
-      try {
-        const r = await fetch(c.server + "/sharegroups" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(msg.value || {}),
-        });
-        send(await r.json());
-      } catch (e) {
-        send({ ok: false, error: String(e) });
-      }
-    });
-    return true;
-  }
-  if (msg && msg.type === "sharePostGet") {
-    cfg().then(async (c) => {
-      try {
-        const r = await fetch(c.server + "/sharepost" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), { cache: "no-store" });
-        send(await r.json());
-      } catch (e) {
-        send({ ok: false, error: String(e) });
-      }
-    });
-    return true;
-  }
-  if (msg && msg.type === "sharePostSet") {
-    cfg().then(async (c) => {
-      try {
-        const r = await fetch(c.server + "/sharepost" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(msg.value || {}),
-        });
-        send(await r.json());
-      } catch (e) {
-        send({ ok: false, error: String(e) });
-      }
-    });
-    return true;
-  }
-  if (msg && msg.type === "commentGet") {
-    cfg().then(async (c) => {
-      try {
-        const r = await fetch(c.server + "/comment" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), { cache: "no-store" });
-        send(await r.json());
-      } catch (e) {
-        send({ ok: false, error: String(e) });
-      }
-    });
-    return true;
-  }
-  if (msg && msg.type === "commentSet") {
-    cfg().then(async (c) => {
-      try {
-        const r = await fetch(c.server + "/comment" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(msg.value || {}),
-        });
-        send(await r.json());
-      } catch (e) {
-        send({ ok: false, error: String(e) });
-      }
-    });
-    return true;
-  }
-  if (msg && msg.type === "groupscanGet") {
-    cfg().then(async (c) => {
-      try {
-        const r = await fetch(c.server + "/groupscan" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), { cache: "no-store" });
-        send(await r.json());
-      } catch (e) {
-        send({ ok: false, error: String(e) });
-      }
-    });
-    return true;
-  }
-  if (msg && msg.type === "groupscanSet") {
-    cfg().then(async (c) => {
-      try {
-        const r = await fetch(c.server + "/groupscan" + (c.token ? "?token=" + encodeURIComponent(c.token) : ""), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(msg.value || {}),
-        });
-        send(await r.json());
-      } catch (e) {
-        send({ ok: false, error: String(e) });
-      }
-    });
-    return true;
-  }
+  const ep = API[msg.type];
+  if (!ep) return;
+  (async () => {
+    try {
+      const c = await cfg();
+      const q = c.token ? "?token=" + encodeURIComponent(c.token) : "";
+      const opts = ep.method
+        ? { method: ep.method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(msg.value || {}) }
+        : { cache: "no-store" };
+      const r = await fetch(c.server + ep.path + q, opts);
+      send(await r.json());
+    } catch (e) {
+      send({ ok: false, error: String(e) });
+    }
+  })();
+  return true;
 });
 init();

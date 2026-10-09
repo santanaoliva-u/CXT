@@ -97,8 +97,9 @@ def main():
     got = {}
     if not reset and os.path.exists(OUT):
         try:
-            for g in json.load(open(OUT, encoding="utf-8")).get("groups", []):
-                got[g["id"]] = g["name"]
+            with open(OUT, encoding="utf-8") as f:
+                for g in json.load(f).get("groups", []):
+                    got[g["id"]] = g["name"]
         except Exception:
             pass
     call("tab.activate", {"tabId": TAB})
