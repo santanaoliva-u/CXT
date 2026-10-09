@@ -71,7 +71,8 @@ Cualquier operación es `./bin/cxt <op> '<json>'`. El CLI también acepta texto 
 | `navigate`, `back`, `forward`, `reload` | navegación |
 | `read` | texto visible de la página / área principal |
 | `snapshot` | lista compacta de elementos con refs `@eN` (tipo accesibilidad) |
-| `find`, `deepfind` | buscar elementos por texto (atraviesa shadow DOM) |
+| `find` | buscar elementos por texto en el documento (rápido) |
+| `deepfind` | buscar por texto atravesando el shadow DOM (profundo) |
 | `click`, `type`, `key`, `scroll`, `wait`, `waitFor` | interacción con el DOM |
 | `cdpclick`, `cdpclicktext`, `cdpclickref`, `cdptype`, `cdpkey`, `cdp` | entrada **confiable** (CDP) y CDP crudo |
 | `probe`, `batch`, `macro` | chequeos baratos, operaciones por lotes, recetas con nombre |
