@@ -1,6 +1,7 @@
 // CXT background service worker (MV3). Classic script, no imports.
 const DEFAULTS = { server: "http://127.0.0.1:8799", token: "", enabled: true, maxHops: 0 };
 let running = false;
+let lastStore = 0;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -36,9 +37,30 @@ function hookDialogs() {
 }
 
 const pageEnabled = new Set();
+const detachTimers = new Map();
+
+function scheduleDetach(tabId) {
+  const prev = detachTimers.get(tabId);
+  if (prev) clearTimeout(prev);
+  detachTimers.set(
+    tabId,
+    setTimeout(() => {
+      detachTimers.delete(tabId);
+      try {
+        chrome.debugger.detach({ tabId }).catch(() => {});
+      } catch (e) {}
+      pageEnabled.delete(tabId);
+    }, 8000)
+  );
+}
 
 async function cdp(tabId, method, params) {
   hookDialogs();
+  const prev = detachTimers.get(tabId);
+  if (prev) {
+    clearTimeout(prev);
+    detachTimers.delete(tabId);
+  }
   try {
     if (!pageEnabled.has(tabId)) {
       try {
@@ -46,7 +68,9 @@ async function cdp(tabId, method, params) {
         pageEnabled.add(tabId);
       } catch (e) {}
     }
-    return await chrome.debugger.sendCommand({ tabId }, method, params || {});
+    const r = await chrome.debugger.sendCommand({ tabId }, method, params || {});
+    scheduleDetach(tabId);
+    return r;
   } catch (e) {
     pageEnabled.delete(tabId);
     try {
@@ -54,7 +78,9 @@ async function cdp(tabId, method, params) {
       await chrome.debugger.sendCommand({ tabId }, "Page.enable", {});
       pageEnabled.add(tabId);
     } catch (e2) {}
-    return await chrome.debugger.sendCommand({ tabId }, method, params || {});
+    const r = await chrome.debugger.sendCommand({ tabId }, method, params || {});
+    scheduleDetach(tabId);
+    return r;
   }
 }
 
@@ -87,9 +113,12 @@ async function loop() {
     } catch (e) {
       out = { id: cmd.id, ok: false, error: String(e && e.message ? e.message : e) };
     }
-    await chrome.storage.local.set({
-      last: { op: cmd.op, ok: out.ok, error: out.error || "", at: Date.now() },
-    });
+    if (Date.now() - lastStore > 1500) {
+      lastStore = Date.now();
+      await chrome.storage.local.set({
+        last: { op: cmd.op, ok: out.ok, error: out.error || "", at: Date.now() },
+      });
+    }
     try {
       await post(c.server, "/result", c.token, out);
     } catch (e) {}
@@ -214,7 +243,8 @@ async function exec(op, args) {
     case "cdpkey": {
       const t = await resolveTab(args);
       const key = args.key || "Enter";
-      const code = key === "Enter" ? 13 : key === "Tab" ? 9 : key === "Escape" ? 27 : 0;
+      const KMAP = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35, PageUp: 33, PageDown: 34, " ": 32 };
+      const code = KMAP[key] != null ? KMAP[key] : key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0;
       await cdp(t.id, "Input.dispatchKeyEvent", { type: "keyDown", key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code });
       await cdp(t.id, "Input.dispatchKeyEvent", { type: "keyUp", key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code });
       return { pressed: true, key };
@@ -295,12 +325,14 @@ async function exec(op, args) {
           }
         }
         snapState.set(t.id, cur);
+        capSnap();
         const cap = args.maxChars || 6000;
         let body = lines.join("\n");
         if (body.length > cap) body = body.slice(0, cap) + "\n...[truncado]";
         return { mode: "delta", added, removed, changed, text: body || "(sin cambios)" };
       }
       snapState.set(t.id, cur);
+      capSnap();
       return { mode: args.mode || "act", total: res.total, kept: items.length, text: snapText(items, args) };
     }
     case "probe": {
@@ -359,6 +391,10 @@ async function exec(op, args) {
 }
 
 const snapState = new Map();
+const SNAP_MAX = 8;
+function capSnap() {
+  while (snapState.size > SNAP_MAX) snapState.delete(snapState.keys().next().value);
+}
 
 const MACROS = {
   "fb.post": [
@@ -430,49 +466,52 @@ function snapText(items, opts) {
 // Injected into the page. Must be fully self-contained (no outer references).
 async function pageFn(op, args) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const NODE_CAP = 8000;
+  const VIS = new WeakMap();
   const visible = (el) => {
-    if (!el || !el.getClientRects().length) return false;
-    const s = getComputedStyle(el);
-    return s.display !== "none" && s.visibility !== "hidden" && s.opacity !== "0";
+    if (!el) return false;
+    let v = VIS.get(el);
+    if (v !== undefined) return v;
+    v = false;
+    try {
+      if (el.checkVisibility) {
+        v = el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+      } else {
+        const r = el.getClientRects();
+        if (r && r.length) {
+          const s = getComputedStyle(el);
+          v = s.display !== "none" && s.visibility !== "hidden" && s.opacity !== "0";
+        }
+      }
+    } catch (e) {}
+    VIS.set(el, v);
+    return v;
   };
   const norm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
-  const deepRoots = () => {
-    const roots = [document];
-    const seen = new Set(roots);
-    const visit = (root) => {
-      let els = [];
-      try {
-        els = Array.from(root.querySelectorAll("*"));
-      } catch (e) {
-        return;
-      }
-      for (const el of els) {
-        if (el.tagName === "IFRAME") {
-          let d = null;
-          try {
-            d = el.contentDocument;
-          } catch (e) {}
-          if (d && !seen.has(d)) {
-            seen.add(d);
-            roots.push(d);
-            visit(d);
-          }
-        }
-        if (el.shadowRoot && !seen.has(el.shadowRoot)) {
-          seen.add(el.shadowRoot);
-          roots.push(el.shadowRoot);
-          visit(el.shadowRoot);
-        }
-      }
-    };
-    visit(document);
-    return roots;
-  };
-  const deepAll = (sel) => {
+  const deepAll = (sel, cap) => {
+    const limit = cap || NODE_CAP;
     const out = [];
-    for (const r of deepRoots()) {
+    const add = (list) => {
+      for (const el of list) {
+        out.push(el);
+        if (out.length >= limit) return true;
+      }
+      return false;
+    };
+    try {
+      if (add(document.querySelectorAll(sel || "*"))) return out;
+    } catch (e) {}
+    if (out.length >= limit) return out;
+    let hosts = [];
+    try {
+      hosts = document.querySelectorAll("*");
+    } catch (e) {}
+    const n = Math.min(hosts.length, NODE_CAP * 2);
+    for (let i = 0; i < n; i++) {
+      const sr = hosts[i].shadowRoot;
+      if (!sr) continue;
       try {
-        out.push(...Array.from(r.querySelectorAll(sel || "*")));
+        if (add(sr.querySelectorAll(sel || "*"))) break;
       } catch (e) {}
     }
     return out;
@@ -542,7 +581,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     } catch (e) {}
   };
   const press = (el, key) => {
-    const code = key === "Enter" ? 13 : key === "Tab" ? 9 : key === "Escape" ? 27 : 0;
+    const KMAP = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35, PageUp: 33, PageDown: 34, " ": 32 };
+    const code = KMAP[key] != null ? KMAP[key] : key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0;
     el.dispatchEvent(new KeyboardEvent("keydown", { key, keyCode: code, which: code, bubbles: true }));
     el.dispatchEvent(new KeyboardEvent("keypress", { key, keyCode: code, which: code, bubbles: true }));
     el.dispatchEvent(new KeyboardEvent("keyup", { key, keyCode: code, which: code, bubbles: true }));
@@ -649,13 +689,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       }
     }
     case "find": {
-      const els = Array.from(document.querySelectorAll(args.selector || "*"));
+      const all = document.querySelectorAll(args.selector || "*");
       const lim = args.limit || 25;
       const items = [];
-      els.forEach((el, i) => {
-        if (items.length >= lim) return;
+      for (let i = 0; i < all.length && items.length < lim; i++) {
+        const el = all[i];
+        const vis = visible(el);
+        if (args.visibleOnly && !vis) continue;
         const r = el.getBoundingClientRect();
-        if (args.visibleOnly && !visible(el)) return;
         items.push({
           i,
           tag: el.tagName,
@@ -663,33 +704,34 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
           aria: el.getAttribute("aria-label"),
           ph: el.getAttribute("placeholder"),
           ce: el.isContentEditable || el.getAttribute("contenteditable") || null,
-          vis: visible(el),
+          vis,
           w: Math.round(r.width),
           h: Math.round(r.height),
           x: Math.round(r.left),
           y: Math.round(r.top),
-          text: norm(el.innerText || el.value || el.getAttribute("aria-label")).slice(0, 60),
+          text: norm(el.textContent || el.value || el.getAttribute("aria-label")).slice(0, 60),
         });
-      });
-      return { count: els.length, items };
+      }
+      return { count: items.length, scanned: all.length, items };
     }
     case "deepfind": {
       const t = norm(args.text || "");
-      const els = deepAll(args.selector || "*");
       const lim = args.limit || 25;
+      const els = deepAll(args.selector || "*", NODE_CAP);
       const items = [];
-      els.forEach((el, i) => {
-        if (items.length >= lim) return;
-        const s = norm(el.innerText || el.value || el.getAttribute("aria-label") || el.textContent || "");
-        if (t && (args.exact ? s !== t : !s.includes(t))) return;
+      for (let i = 0; i < els.length && items.length < lim; i++) {
+        const el = els[i];
+        const s = norm(el.textContent || el.value || el.getAttribute("aria-label") || "");
+        if (t && (args.exact ? s !== t : !s.includes(t))) continue;
+        const vis = visible(el);
+        if (args.visibleOnly && !vis) continue;
         const r = el.getBoundingClientRect();
-        if (args.visibleOnly && !visible(el)) return;
         items.push({
           i,
           tag: el.tagName,
           role: el.getAttribute("role"),
           aria: el.getAttribute("aria-label"),
-          vis: visible(el),
+          vis,
           w: Math.round(r.width),
           h: Math.round(r.height),
           x: Math.round(r.left),
@@ -697,30 +739,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
           text: s.slice(0, 60),
           match: t ? (s === t ? "exact" : s.includes(t) ? "stable" : null) : null,
         });
-      });
-      return { count: els.length, items };
-    }
-    case "snapshot": {
-      const els = deepAll(
-        args.selector ||
-          "a,button,input,textarea,select,[role=button],[role=link],[role=textbox],[role=menuitem],[role=checkbox],[contenteditable='true'],[aria-label]"
-      );
-      const lim = args.limit || 120;
-      const items = [];
-      let n = 0;
-      for (const el of els) {
-        if (items.length >= lim) break;
-        if (!visible(el)) continue;
-        const r = el.getBoundingClientRect();
-        if (r.width < 2 || r.height < 2) continue;
-        const name = norm(el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.value || el.innerText || el.textContent || "").slice(0, 50);
-        const ref = "e" + n++;
-        try {
-          el.setAttribute("data-cxt-ref", ref);
-        } catch (e) {}
-        items.push({ ref, tag: el.tagName, role: el.getAttribute("role"), name, x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) });
       }
-      return { count: items.length, items };
+      return { count: items.length, scanned: els.length, items };
     }
     case "refbox": {
       const el = deepAll('[data-cxt-ref="' + (args.ref || "") + '"]')[0];
@@ -797,14 +817,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     }
     case "probe": {
       const t = norm(args.text || "");
-      const els = deepAll(args.selector || "*");
+      const els = deepAll(args.selector || "*", NODE_CAP);
       let n = 0;
       let first = null;
       for (const el of els) {
-        if (!visible(el)) continue;
-        const s = norm(el.innerText || el.value || el.getAttribute("aria-label") || el.textContent || "");
+        const s = norm(el.textContent || el.value || el.getAttribute("aria-label") || "");
         const hit = t ? (args.exact ? s === t : s.includes(t)) : true;
         if (!hit) continue;
+        if (!visible(el)) continue;
         n++;
         if (!first) {
           const r = el.getBoundingClientRect();

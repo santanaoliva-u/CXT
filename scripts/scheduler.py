@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import json, os, random, subprocess, time
 
+import cxtlib
+
 DIR = os.path.expanduser("~/.cxt")
 CFG = os.path.join(DIR, "schedule.json")
 CMD = os.path.join(DIR, "schedule.cmd.json")
@@ -48,15 +50,7 @@ def defaults():
 
 def resolve_tab():
     try:
-        out = subprocess.run([CXT, "tabs"], capture_output=True, text=True, timeout=20).stdout
-        for line in out.splitlines():
-            line = line.strip()
-            if not line.startswith("{"):
-                continue
-            t = json.loads(line)
-            url = t.get("url", "")
-            if "facebook.com" in url and "chrome-extension" not in url:
-                return str(t.get("id") or t.get("tabId") or "")
+        return str(cxtlib.resolve_tab(CXT) or "")
     except Exception as e:
         log("resolve_tab err " + str(e))
     return ""

@@ -1,5 +1,7 @@
 import json, os, subprocess, sys, time, unicodedata
 
+import cxtlib
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 CXT = os.path.join(HERE, "bin", "cxt")
 OUT = os.path.join(HERE, "groups.json")
@@ -7,16 +9,7 @@ URL = "https://www.facebook.com/groups/joins/?nav_source=tab&ordering=viewer_add
 
 
 def _resolve_tab():
-    if os.environ.get("CXT_TAB"):
-        return int(os.environ["CXT_TAB"])
-    try:
-        out = subprocess.check_output([CXT, "tabs"]).decode()
-        for t in json.loads(out):
-            if "facebook.com" in (t.get("url") or ""):
-                return int(t["id"])
-    except Exception:
-        pass
-    return None
+    return cxtlib.resolve_tab(CXT)
 
 
 TAB = _resolve_tab()
