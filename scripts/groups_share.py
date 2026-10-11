@@ -233,6 +233,8 @@ def job(cmd):
 
 
 def main():
+    if not TAB:
+        sys.exit("no encontre pestana de Facebook (abre Facebook o define CXT_TAB)")
     if "--cmd" in sys.argv:
         p = sys.argv.index("--cmd")
         with open(sys.argv[p + 1], encoding="utf-8") as f:

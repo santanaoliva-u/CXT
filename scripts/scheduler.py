@@ -91,8 +91,9 @@ def publish(text):
     tab = resolve_tab()
     if tab:
         env["CXT_TAB"] = tab
+    env["CXT_POST_URL"] = os.environ.get("CXT_POST_URL") or "https://www.facebook.com/"
     try:
-        p = subprocess.run(["python3", "-u", PUB, path], capture_output=True, text=True, timeout=240, env=env)
+        p = subprocess.run(["python3", "-u", PUB, path], capture_output=True, text=True, timeout=300, env=env)
         for line in p.stdout.splitlines():
             line = line.strip()
             if line:
@@ -124,6 +125,7 @@ def apply_cmd(cfg):
         log("cmd: INICIAR interval=" + str(cfg.get("interval_min")) + " count=" + str(cfg.get("remaining")))
     elif "enabled" in cmd:
         cfg["next_at"] = 0
+        cfg["remaining"] = 0
         log("cmd: DETENER")
     return cfg
 

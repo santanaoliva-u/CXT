@@ -86,6 +86,8 @@ def one_pass():
 
 
 def main():
+    if not TAB:
+        sys.exit("no encontre pestana de Facebook (abre Facebook o define CXT_TAB)")
     reset = "--reset" in sys.argv
     got = {}
     if not reset and os.path.exists(OUT):
