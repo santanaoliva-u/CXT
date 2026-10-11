@@ -92,7 +92,11 @@ def publish(text):
     if tab:
         env["CXT_TAB"] = tab
     try:
-        p = subprocess.run(["python3", PUB, path], capture_output=True, text=True, timeout=180, env=env)
+        p = subprocess.run(["python3", "-u", PUB, path], capture_output=True, text=True, timeout=240, env=env)
+        for line in p.stdout.splitlines():
+            line = line.strip()
+            if line:
+                log("pub| " + line[:200])
         for line in reversed(p.stdout.splitlines()):
             line = line.strip()
             if line.startswith("{"):
