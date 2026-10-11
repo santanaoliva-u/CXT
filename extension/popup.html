@@ -3,120 +3,190 @@
   <head>
     <meta charset="utf-8" />
     <style>
-      body { font: 13px system-ui, sans-serif; width: 280px; margin: 0; padding: 12px; background: #14161a; color: #e6e6e6; }
-      h1 { font-size: 14px; margin: 0 0 8px; }
-      label { display: block; margin: 8px 0 2px; color: #9aa4b2; }
-      input[type="text"] { width: 100%; box-sizing: border-box; padding: 6px; background: #0d0f12; color: #e6e6e6; border: 1px solid #2a2f38; border-radius: 6px; }
-      .row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
-      button { flex: 1; padding: 7px 10px; border: 0; border-radius: 6px; background: #2b6cff; color: #fff; cursor: pointer; }
-      button.ghost { background: #242833; }
-      #power { width: 100%; margin: 10px 0 2px; padding: 12px; font-size: 15px; font-weight: 700; letter-spacing: .5px; border-radius: 8px; }
-      #power.on { background: #16794a; }
-      #power.off { background: #a1261d; }
-      #status { margin-top: 10px; font-size: 12px; color: #9aa4b2; white-space: pre-wrap; }
-      .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #555; margin-right: 6px; }
+      :root { --bg:#14161a; --panel:#0d0f12; --line:#2a2f38; --mut:#9aa4b2; --fg:#e6e6e6; --blue:#2b6cff; --green:#16794a; --red:#a1261d; }
+      * { box-sizing: border-box; }
+      body { font: 13px system-ui, -apple-system, sans-serif; width: 360px; margin: 0; background: var(--bg); color: var(--fg); }
+      header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 5; }
+      header h1 { font-size: 14px; margin: 0; flex: 1; font-weight: 600; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: #555; display: inline-block; flex: none; }
       .on-dot { background: #2ecc71; }
-      select, textarea { width: 100%; box-sizing: border-box; padding: 6px; background: #0d0f12; color: #e6e6e6; border: 1px solid #2a2f38; border-radius: 6px; }
-      textarea { height: 58px; resize: vertical; font: inherit; }
-      hr { border: 0; border-top: 1px solid #2a2f38; margin: 12px 0; }
-      h2 { font-size: 11px; margin: 0 0 4px; color: #9aa4b2; text-transform: uppercase; letter-spacing: .6px; }
+      .off-dot { background: #e74c3c; }
+      #conn { font-size: 11px; color: #6b7482; }
+      #power { width: 100%; margin: 10px 12px 0; width: calc(100% - 24px); padding: 11px; font-size: 14px; font-weight: 700; letter-spacing: .4px; border: 0; border-radius: 8px; color: #fff; cursor: pointer; }
+      #power.on { background: var(--green); }
+      #power.off { background: var(--red); }
+      nav { display: flex; gap: 2px; padding: 8px 12px 0; }
+      nav button { flex: 1; padding: 7px 4px; font-size: 12px; background: #1b1e24; color: var(--mut); border: 0; border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; cursor: pointer; position: relative; }
+      nav button.active { color: #fff; background: #22262e; border-bottom-color: var(--blue); }
+      nav .badge { position: absolute; top: 3px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: #2ecc71; display: none; }
+      nav .badge.show { display: block; }
+      main { padding: 10px 12px 14px; }
+      section { display: none; }
+      section.active { display: block; }
+      h2 { font-size: 11px; margin: 14px 0 4px; color: var(--mut); text-transform: uppercase; letter-spacing: .6px; }
+      h2:first-child { margin-top: 2px; }
+      label { display: block; margin: 9px 0 3px; color: var(--mut); font-size: 12px; }
+      input[type="text"], input[type="number"], select, textarea { width: 100%; padding: 7px; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+      textarea { height: 56px; resize: vertical; }
+      .row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+      button.act { flex: 1; padding: 8px 10px; border: 0; border-radius: 6px; background: var(--blue); color: #fff; cursor: pointer; font-weight: 600; }
+      button.ghost { flex: 1; padding: 8px 10px; border: 0; border-radius: 6px; background: #242833; color: #dfe4ea; cursor: pointer; }
+      button.danger { background: #7a2b23; color: #fff; }
+      .chk { display: flex; align-items: center; gap: 6px; margin-top: 10px; color: var(--mut); font-size: 12px; }
+      .chk input { width: auto; }
+      .status { margin-top: 8px; font-size: 12px; color: var(--mut); white-space: pre-wrap; background: #0f1116; border: 1px solid var(--line); border-radius: 6px; padding: 7px; }
+      .results { margin-top: 6px; font-size: 12px; max-height: 150px; overflow: auto; }
+      .results div { padding: 3px 0; border-bottom: 1px dashed #23272f; }
+      .ok { color: #2ecc71; }
+      .bad { color: #e74c3c; }
+      .seg { display: flex; gap: 6px; margin: 2px 0 4px; }
+      .seg button { flex: 1; padding: 6px; font-size: 12px; border: 1px solid var(--line); background: #1b1e24; color: var(--mut); border-radius: 6px; cursor: pointer; }
+      .seg button.active { background: #22262e; color: #fff; border-color: var(--blue); }
+      .hint { font-size: 11px; color: #6b7482; margin-top: 4px; }
     </style>
   </head>
   <body>
-    <h1><span id="dot" class="dot"></span>CXT — Control local</h1>
+    <header>
+      <span id="dot" class="dot"></span>
+      <h1>CXT — Control local</h1>
+      <span id="conn">—</span>
+    </header>
+
     <button id="power" class="off">● DESACTIVADA</button>
-    <label>Servidor</label>
-    <input id="server" type="text" placeholder="http://127.0.0.1:8799" />
-    <label>Token (opcional)</label>
-    <input id="token" type="text" placeholder="vacío = solo localhost" />
-    <div class="row">
-      <button id="save">Guardar</button>
-      <button id="test" class="ghost">Probar</button>
-    </div>
-    <div id="status">—</div>
-    <hr />
-    <h2>Auto-publicar</h2>
-    <label>Intervalo</label>
-    <select id="sint">
-      <option value="3">cada 3 min</option>
-      <option value="5" selected>cada 5 min</option>
-      <option value="10">cada 10 min</option>
-      <option value="0.1">cada 6 s (prueba)</option>
-    </select>
-    <label>Cantidad de publicaciones</label>
-    <input id="scount" type="number" min="1" value="3" />
-    <label>Tema</label>
-    <select id="stopic">
-      <option value="auto">auto (noticias de Playa del Carmen)</option>
-      <option value="fixed">texto fijo (abajo)</option>
-    </select>
-    <textarea id="stext" placeholder="Texto fijo (si eliges 'texto fijo')"></textarea>
-    <div class="row">
-      <button id="sstart">INICIAR</button>
-      <button id="sstop" class="ghost">DETENER</button>
-    </div>
-    <div id="sstatus">—</div>
-    <hr />
-    <h2>Compartir en grupos</h2>
-    <label>Filtrar grupos (separados por coma)</label>
-    <input id="gfilter" type="text" placeholder="playa del carmen, guadalupan" />
-    <label>Límite (0 = todos los filtrados)</label>
-    <input id="glimit" type="number" min="0" value="3" />
-    <label>Texto a compartir</label>
-    <textarea id="gtext" placeholder="Texto que se publicará en cada grupo"></textarea>
-    <label><input type="checkbox" id="gdry" checked style="width:auto" /> Simulación (no publica; solo prueba)</label>
-    <div class="row">
-      <button id="gstart">COMPARTIR</button>
-      <button id="gstop" class="ghost">DETENER</button>
-    </div>
-    <div id="gstatus">—</div>
-    <hr />
-    <h2>Compartir publicación</h2>
-    <label>Enlace del post (vacío = post visible)</label>
-    <input id="purl" type="text" placeholder="https://www.facebook.com/..." />
-    <label>Filtrar grupos (coma) o nombres</label>
-    <input id="pfilter" type="text" placeholder="playa del carmen, guadalupan" />
-    <label>Límite (0 = todos)</label>
-    <input id="plimit" type="number" min="0" value="3" />
-    <label>Texto extra (opcional)</label>
-    <textarea id="ptext" placeholder="Opcional: comentario que acompaña al compartido"></textarea>
-    <label><input type="checkbox" id="pdry" checked style="width:auto" /> Simulación (no publica)</label>
-    <div class="row">
-      <button id="pstart">COMPARTIR POST</button>
-      <button id="pstop" class="ghost">DETENER</button>
-    </div>
-    <div id="pstatus">—</div>
-    <hr />
-    <h2>Comentar</h2>
-    <label>Enlace (vacío = post visible)</label>
-    <input id="curl" type="text" placeholder="https://www.facebook.com/..." />
-    <label>Modo</label>
-    <select id="cmode">
-      <option value="auto">auto (frase breve)</option>
-      <option value="fixed">texto fijo (abajo)</option>
-    </select>
-    <textarea id="ctext" placeholder="Texto del comentario (si eliges 'texto fijo')"></textarea>
-    <label>Intervalo</label>
-    <select id="cint">
-      <option value="0">una vez</option>
-      <option value="3">cada 3 min</option>
-      <option value="5">cada 5 min</option>
-      <option value="10">cada 10 min</option>
-    </select>
-    <label>Cantidad</label>
-    <input id="ccount" type="number" min="1" value="1" />
-    <label><input type="checkbox" id="cdry" checked style="width:auto" /> Simulación (no publica)</label>
-    <div class="row">
-      <button id="cstart">COMENTAR</button>
-      <button id="cstop" class="ghost">DETENER</button>
-    </div>
-    <div id="cstatus">—</div>
-    <hr />
-    <h2>Grupos</h2>
-    <div class="row">
-      <button id="grscan">ESCANEAR GRUPOS</button>
-    </div>
-    <div id="grstatus">—</div>
+
+    <nav>
+      <button data-tab="estado" class="active">Estado</button>
+      <button data-tab="publicar">Publicar<span class="badge" id="b_pub"></span></button>
+      <button data-tab="compartir">Compartir<span class="badge" id="b_share"></span></button>
+      <button data-tab="comentar">Comentar<span class="badge" id="b_com"></span></button>
+      <button data-tab="ajustes">Ajustes<span class="badge" id="b_grp"></span></button>
+    </nav>
+
+    <main>
+      <section id="t_estado" class="active">
+        <h2>Estado</h2>
+        <div id="status" class="status">—</div>
+        <div class="row">
+          <button id="test" class="ghost">Probar conexión</button>
+          <button id="stopall" class="danger">DETENER TODO</button>
+        </div>
+        <p class="hint">Al terminar una tarea usa <b>DETENER TODO</b> para parar cualquier job en curso.</p>
+      </section>
+
+      <section id="t_publicar">
+        <h2>Auto-publicar en el muro</h2>
+        <label>Intervalo</label>
+        <select id="sint">
+          <option value="3">cada 3 min</option>
+          <option value="5" selected>cada 5 min</option>
+          <option value="10">cada 10 min</option>
+          <option value="0.1">cada 6 s (prueba)</option>
+        </select>
+        <label>Cantidad de publicaciones</label>
+        <input id="scount" type="number" min="1" value="3" />
+        <label>Tema</label>
+        <select id="stopic">
+          <option value="auto">auto (titulares de noticias)</option>
+          <option value="fixed">texto fijo (abajo)</option>
+        </select>
+        <textarea id="stext" placeholder="Texto fijo (si eliges 'texto fijo')"></textarea>
+        <div class="row">
+          <button id="sstart" class="act">INICIAR</button>
+          <button id="sstop" class="ghost">DETENER</button>
+        </div>
+        <div id="sstatus" class="status">—</div>
+      </section>
+
+      <section id="t_compartir">
+        <div class="seg" id="segshare">
+          <button data-mode="post" class="active">Post existente</button>
+          <button data-mode="text">Texto nuevo</button>
+        </div>
+
+        <div id="m_post">
+          <h2>Compartir una publicación</h2>
+          <label>Enlace del post</label>
+          <input id="purl" type="text" placeholder="https://www.facebook.com/..." />
+          <label>Texto que identifica el post (para no equivocar)</label>
+          <input id="pexpect" type="text" placeholder="ej. Barber / una palabra del título" />
+          <label>Grupos (filtro por coma o nombres)</label>
+          <input id="pfilter" type="text" placeholder="playa del carmen, guadalupan" />
+          <label>Límite (0 = todos)</label>
+          <input id="plimit" type="number" min="0" value="3" />
+          <label>Texto extra (opcional)</label>
+          <textarea id="ptext" placeholder="Comentario que acompaña al compartido"></textarea>
+          <div class="chk"><input type="checkbox" id="pdry" checked /> Simulación (no publica)</div>
+          <div class="row">
+            <button id="pstart" class="act">COMPARTIR POST</button>
+            <button id="pstop" class="ghost">DETENER</button>
+          </div>
+          <div id="pstatus" class="status">—</div>
+          <div id="presults" class="results"></div>
+        </div>
+
+        <div id="m_text" style="display: none">
+          <h2>Compartir un texto nuevo</h2>
+          <label>Grupos (filtro por coma)</label>
+          <input id="gfilter" type="text" placeholder="playa del carmen, guadalupan" />
+          <label>Límite (0 = todos)</label>
+          <input id="glimit" type="number" min="0" value="3" />
+          <label>Texto a publicar en cada grupo</label>
+          <textarea id="gtext" placeholder="Texto que se publicará en cada grupo"></textarea>
+          <div class="chk"><input type="checkbox" id="gdry" checked /> Simulación (no publica)</div>
+          <div class="row">
+            <button id="gstart" class="act">COMPARTIR TEXTO</button>
+            <button id="gstop" class="ghost">DETENER</button>
+          </div>
+          <div id="gstatus" class="status">—</div>
+          <div id="gresults" class="results"></div>
+        </div>
+      </section>
+
+      <section id="t_comentar">
+        <h2>Comentar</h2>
+        <label>Enlace (vacío = post visible)</label>
+        <input id="curl" type="text" placeholder="https://www.facebook.com/..." />
+        <label>Modo</label>
+        <select id="cmode">
+          <option value="auto">auto (frase breve)</option>
+          <option value="fixed">texto fijo (abajo)</option>
+        </select>
+        <textarea id="ctext" placeholder="Texto del comentario (si eliges 'texto fijo')"></textarea>
+        <label>Intervalo</label>
+        <select id="cint">
+          <option value="0">una vez</option>
+          <option value="3">cada 3 min</option>
+          <option value="5">cada 5 min</option>
+          <option value="10">cada 10 min</option>
+        </select>
+        <label>Cantidad</label>
+        <input id="ccount" type="number" min="1" value="1" />
+        <div class="chk"><input type="checkbox" id="cdry" checked /> Simulación (no publica)</div>
+        <div class="row">
+          <button id="cstart" class="act">COMENTAR</button>
+          <button id="cstop" class="ghost">DETENER</button>
+        </div>
+        <div id="cstatus" class="status">—</div>
+        <div id="cresults" class="results"></div>
+      </section>
+
+      <section id="t_ajustes">
+        <h2>Servidor</h2>
+        <label>Servidor</label>
+        <input id="server" type="text" placeholder="http://127.0.0.1:8799" />
+        <label>Token (opcional)</label>
+        <input id="token" type="text" placeholder="vacío = solo localhost" />
+        <div class="row">
+          <button id="save" class="act">Guardar</button>
+          <button id="test2" class="ghost">Probar</button>
+        </div>
+        <h2>Grupos</h2>
+        <div class="row">
+          <button id="grscan" class="act">ESCANEAR GRUPOS</button>
+        </div>
+        <div id="grstatus" class="status">—</div>
+      </section>
+    </main>
     <script src="popup.js"></script>
   </body>
 </html>
