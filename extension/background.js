@@ -883,6 +883,7 @@ const API = {
   commentSet: { path: "/comment", method: "POST" },
   groupscanGet: { path: "/groupscan" },
   groupscanSet: { path: "/groupscan", method: "POST" },
+  logGet: { path: "/log" },
 };
 chrome.runtime.onMessage.addListener((msg, _s, send) => {
   if (!msg || !msg.type) return;
@@ -917,7 +918,10 @@ chrome.runtime.onMessage.addListener((msg, _s, send) => {
   (async () => {
     try {
       const c = await cfg();
-      const q = c.token ? "?token=" + encodeURIComponent(c.token) : "";
+      const qs = [];
+      if (c.token) qs.push("token=" + encodeURIComponent(c.token));
+      if (msg.query) for (const k of Object.keys(msg.query)) qs.push(encodeURIComponent(k) + "=" + encodeURIComponent(msg.query[k]));
+      const q = qs.length ? "?" + qs.join("&") : "";
       const opts = ep.method
         ? { method: ep.method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(msg.value || {}) }
         : { cache: "no-store" };

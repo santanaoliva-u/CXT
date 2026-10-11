@@ -1,192 +1,187 @@
 <!doctype html>
 <html lang="es">
-  <head>
-    <meta charset="utf-8" />
-    <style>
-      :root { --bg:#14161a; --panel:#0d0f12; --line:#2a2f38; --mut:#9aa4b2; --fg:#e6e6e6; --blue:#2b6cff; --green:#16794a; --red:#a1261d; }
-      * { box-sizing: border-box; }
-      body { font: 13px system-ui, -apple-system, sans-serif; width: 360px; margin: 0; background: var(--bg); color: var(--fg); }
-      header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 5; }
-      header h1 { font-size: 14px; margin: 0; flex: 1; font-weight: 600; }
-      .dot { width: 9px; height: 9px; border-radius: 50%; background: #555; display: inline-block; flex: none; }
-      .on-dot { background: #2ecc71; }
-      .off-dot { background: #e74c3c; }
-      #conn { font-size: 11px; color: #6b7482; }
-      #power { width: 100%; margin: 10px 12px 0; width: calc(100% - 24px); padding: 11px; font-size: 14px; font-weight: 700; letter-spacing: .4px; border: 0; border-radius: 8px; color: #fff; cursor: pointer; }
-      #power.on { background: var(--green); }
-      #power.off { background: var(--red); }
-      nav { display: flex; gap: 2px; padding: 8px 12px 0; }
-      nav button { flex: 1; padding: 7px 4px; font-size: 12px; background: #1b1e24; color: var(--mut); border: 0; border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; cursor: pointer; position: relative; }
-      nav button.active { color: #fff; background: #22262e; border-bottom-color: var(--blue); }
-      nav .badge { position: absolute; top: 3px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: #2ecc71; display: none; }
-      nav .badge.show { display: block; }
-      main { padding: 10px 12px 14px; }
-      section { display: none; }
-      section.active { display: block; }
-      h2 { font-size: 11px; margin: 14px 0 4px; color: var(--mut); text-transform: uppercase; letter-spacing: .6px; }
-      h2:first-child { margin-top: 2px; }
-      label { display: block; margin: 9px 0 3px; color: var(--mut); font-size: 12px; }
-      input[type="text"], input[type="number"], select, textarea { width: 100%; padding: 7px; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; font: inherit; }
-      textarea { height: 56px; resize: vertical; }
-      .row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
-      button.act { flex: 1; padding: 8px 10px; border: 0; border-radius: 6px; background: var(--blue); color: #fff; cursor: pointer; font-weight: 600; }
-      button.ghost { flex: 1; padding: 8px 10px; border: 0; border-radius: 6px; background: #242833; color: #dfe4ea; cursor: pointer; }
-      button.danger { background: #7a2b23; color: #fff; }
-      .chk { display: flex; align-items: center; gap: 6px; margin-top: 10px; color: var(--mut); font-size: 12px; }
-      .chk input { width: auto; }
-      .status { margin-top: 8px; font-size: 12px; color: var(--mut); white-space: pre-wrap; background: #0f1116; border: 1px solid var(--line); border-radius: 6px; padding: 7px; }
-      .results { margin-top: 6px; font-size: 12px; max-height: 150px; overflow: auto; }
-      .results div { padding: 3px 0; border-bottom: 1px dashed #23272f; }
-      .ok { color: #2ecc71; }
-      .bad { color: #e74c3c; }
-      .seg { display: flex; gap: 6px; margin: 2px 0 4px; }
-      .seg button { flex: 1; padding: 6px; font-size: 12px; border: 1px solid var(--line); background: #1b1e24; color: var(--mut); border-radius: 6px; cursor: pointer; }
-      .seg button.active { background: #22262e; color: #fff; border-color: var(--blue); }
-      .hint { font-size: 11px; color: #6b7482; margin-top: 4px; }
-    </style>
-  </head>
-  <body>
-    <header>
-      <span id="dot" class="dot"></span>
-      <h1>CXT — Control local</h1>
-      <span id="conn">—</span>
-    </header>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CXT</title>
+<style>
+  :root{--bg:#f5f6f8;--card:#fff;--ink:#1f2430;--mut:#6b7280;--line:#e4e6eb;--acc:#2563eb;--ok:#16a34a;--bad:#dc2626;--warn:#d97706;--rad:11px}
+  @media (prefers-color-scheme:dark){:root{--bg:#14161b;--card:#1c1f26;--ink:#e8eaf0;--mut:#98a0ad;--line:#2a2e37;--acc:#5b93ff}}
+  *{box-sizing:border-box}
+  body{margin:0;width:380px;font:13px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+  header h1{font-size:14px;margin:0;font-weight:700;letter-spacing:.4px}
+  #dot{width:9px;height:9px;border-radius:50%;background:var(--bad);flex:none}
+  #conn{font-size:11px;color:var(--mut);flex:1}
+  #power{border:0;border-radius:20px;padding:6px 12px;font-weight:700;cursor:pointer;color:#fff;background:var(--ok)}
+  #power.off{background:var(--bad)}
+  nav{display:flex;background:var(--card);border-bottom:1px solid var(--line)}
+  nav button{flex:1;border:0;background:none;padding:9px 2px 7px;font:inherit;font-size:11px;color:var(--mut);cursor:pointer;border-bottom:2px solid transparent;position:relative}
+  nav button.on{color:var(--acc);border-bottom-color:var(--acc);font-weight:600}
+  .badge{position:absolute;top:2px;right:5px;min-width:15px;height:15px;line-height:15px;border-radius:8px;background:var(--acc);color:#fff;font-size:9px;padding:0 4px;display:none}
+  .badge.show{display:block}
+  main{padding:12px;max-height:520px;overflow:auto}
+  section{display:none}
+  section.on{display:block}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--rad);padding:11px;margin-bottom:10px}
+  .card h2{font-size:11px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.6px;color:var(--mut)}
+  label{display:block;font-size:11px;color:var(--mut);margin:9px 0 3px}
+  input,select,textarea{width:100%;padding:7px 8px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink);font:inherit;font-size:12px}
+  textarea{min-height:54px;resize:vertical}
+  .row{display:flex;gap:8px}.row>*{flex:1}
+  .chk{display:flex;align-items:center;gap:7px;margin-top:9px;font-size:12px;color:var(--ink)}
+  .chk input{width:auto}
+  .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:6px}
+  .seg button{flex:1;border:0;background:var(--card);padding:7px;font:inherit;font-size:12px;color:var(--mut);cursor:pointer}
+  .seg button.on{background:var(--acc);color:#fff;font-weight:600}
+  .btn{border:0;border-radius:8px;padding:9px 10px;font:inherit;font-weight:700;cursor:pointer;color:#fff;background:var(--acc);width:100%}
+  .btn.sec{background:var(--mut)}
+  .btn.stop{background:var(--bad)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btnrow{display:flex;gap:8px;margin-top:10px}
+  .status{font-size:12px;margin-top:9px;color:var(--mut);white-space:pre-wrap}
+  .bar{height:7px;border-radius:5px;background:var(--line);overflow:hidden;margin-top:10px;display:none}
+  .bar.show{display:block}
+  .bar>i{display:block;height:100%;width:0;background:var(--acc);transition:width .3s}
+  ul.res{list-style:none;margin:8px 0 0;padding:0;font-size:12px}
+  ul.res li{padding:4px 0;border-top:1px solid var(--line);display:flex;gap:6px;align-items:flex-start}
+  ul.res li:first-child{border-top:0}
+  .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+  details.log{margin-top:10px}
+  details.log summary{cursor:pointer;font-size:11px;color:var(--acc);user-select:none}
+  pre.console{margin:7px 0 0;background:#0b0f16;color:#c9d1d9;border-radius:8px;padding:8px;font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;max-height:190px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+  .hint{font-size:11px;color:var(--mut);margin:0 0 6px}
+</style>
+</head>
+<body>
+<header>
+  <span id="dot"></span><h1>CXT</h1><span id="conn">conectando…</span>
+  <button id="power">● …</button>
+</header>
+<nav>
+  <button data-tab="estado" class="on">Estado<span class="badge" id="b_estado"></span></button>
+  <button data-tab="publicar">Publicar<span class="badge" id="b_pub"></span></button>
+  <button data-tab="compartir">Compartir<span class="badge" id="b_share"></span></button>
+  <button data-tab="comentar">Comentar<span class="badge" id="b_com"></span></button>
+  <button data-tab="ajustes">Ajustes<span class="badge" id="b_grp"></span></button>
+</nav>
+<main>
+  <section id="t_estado" class="on">
+    <div class="card">
+      <h2>Resumen</h2>
+      <div id="status" class="status">cargando…</div>
+      <div class="btnrow">
+        <button id="test" class="btn sec">Probar conexión</button>
+        <button id="stopall" class="btn stop">DETENER TODO</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Actividad reciente</h2>
+      <div id="acts" class="status">sin actividad</div>
+    </div>
+  </section>
 
-    <button id="power" class="off">● DESACTIVADA</button>
+  <section id="t_publicar">
+    <div class="card">
+      <h2>Publicar en tu muro</h2>
+      <p class="hint">Escribe o deja que se use el titular del día, y prográmalo cada X minutos.</p>
+      <div class="row">
+        <div><label for="sint">Cada</label>
+          <select id="sint"><option value="3">3 min</option><option value="5">5 min</option><option value="10">10 min</option><option value="0.1">6 s (prueba)</option></select></div>
+        <div><label for="scount">Cantidad</label><input id="scount" type="number" min="1" value="1"></div>
+      </div>
+      <label for="stopic">Tema</label>
+      <select id="stopic"><option value="auto">auto (titulares del día)</option><option value="fixed">texto fijo</option></select>
+      <textarea id="stext" placeholder="Texto fijo (si eliges 'texto fijo')"></textarea>
+      <div class="bar" id="bar_pub"><i></i></div>
+      <div class="btnrow"><button id="sstart" class="btn">INICIAR</button><button id="sstop" class="btn stop">DETENER</button></div>
+      <div id="sstatus" class="status"></div>
+      <details class="log"><summary>Ver proceso en vivo</summary><pre class="console" id="log_pub">(sin datos)</pre></details>
+    </div>
+  </section>
 
-    <nav>
-      <button data-tab="estado" class="active">Estado</button>
-      <button data-tab="publicar">Publicar<span class="badge" id="b_pub"></span></button>
-      <button data-tab="compartir">Compartir<span class="badge" id="b_share"></span></button>
-      <button data-tab="comentar">Comentar<span class="badge" id="b_com"></span></button>
-      <button data-tab="ajustes">Ajustes<span class="badge" id="b_grp"></span></button>
-    </nav>
+  <section id="t_compartir">
+    <div class="card">
+      <h2>Compartir</h2>
+      <div class="seg" id="segshare">
+        <button data-mode="post" class="on">Post existente</button>
+        <button data-mode="text">Texto nuevo</button>
+      </div>
 
-    <main>
-      <section id="t_estado" class="active">
-        <h2>Estado</h2>
-        <div id="status" class="status">—</div>
+      <div id="m_post">
+        <p class="hint">Comparte un post tuyo (link) a los grupos que elijas.</p>
+        <label for="purl">Link del post</label><input id="purl" placeholder="https://www.facebook.com/share/p/…">
+        <label for="pexpect">Texto que identifica el post</label><input id="pexpect" placeholder="p. ej. Barber  (para no compartir el equivocado)">
         <div class="row">
-          <button id="test" class="ghost">Probar conexión</button>
-          <button id="stopall" class="danger">DETENER TODO</button>
+          <div><label for="pfilter">Grupos (texto)</label><input id="pfilter" placeholder="playa del carmen"></div>
+          <div><label for="plimit">Límite</label><input id="plimit" type="number" min="0" value="3"></div>
         </div>
-        <p class="hint">Al terminar una tarea usa <b>DETENER TODO</b> para parar cualquier job en curso.</p>
-      </section>
+        <label for="ptext">Texto extra (opcional)</label><input id="ptext">
+        <label class="chk"><input id="pdry" type="checkbox" checked>Simulación (no publica)</label>
+        <div class="bar" id="bar_sharepost"><i></i></div>
+        <div class="btnrow"><button id="pstart" class="btn">COMPARTIR POST</button><button id="pstop" class="btn stop">DETENER</button></div>
+        <div id="pstatus" class="status"></div>
+        <ul id="presults" class="res"></ul>
+        <details class="log"><summary>Ver proceso en vivo</summary><pre class="console" id="log_sharepost">(sin datos)</pre></details>
+      </div>
 
-      <section id="t_publicar">
-        <h2>Auto-publicar en el muro</h2>
-        <label>Intervalo</label>
-        <select id="sint">
-          <option value="3">cada 3 min</option>
-          <option value="5" selected>cada 5 min</option>
-          <option value="10">cada 10 min</option>
-          <option value="0.1">cada 6 s (prueba)</option>
-        </select>
-        <label>Cantidad de publicaciones</label>
-        <input id="scount" type="number" min="1" value="3" />
-        <label>Tema</label>
-        <select id="stopic">
-          <option value="auto">auto (titulares de noticias)</option>
-          <option value="fixed">texto fijo (abajo)</option>
-        </select>
-        <textarea id="stext" placeholder="Texto fijo (si eliges 'texto fijo')"></textarea>
+      <div id="m_text" style="display:none">
+        <p class="hint">Publica un texto nuevo directamente en cada grupo.</p>
         <div class="row">
-          <button id="sstart" class="act">INICIAR</button>
-          <button id="sstop" class="ghost">DETENER</button>
+          <div><label for="gfilter">Grupos (texto)</label><input id="gfilter" placeholder="playa del carmen"></div>
+          <div><label for="glimit">Límite</label><input id="glimit" type="number" min="0" value="3"></div>
         </div>
-        <div id="sstatus" class="status">—</div>
-      </section>
+        <label for="gtext">Texto</label><textarea id="gtext"></textarea>
+        <label class="chk"><input id="gdry" type="checkbox" checked>Simulación (no publica)</label>
+        <div class="bar" id="bar_share"><i></i></div>
+        <div class="btnrow"><button id="gstart" class="btn">COMPARTIR</button><button id="gstop" class="btn stop">DETENER</button></div>
+        <div id="gstatus" class="status"></div>
+        <ul id="gresults" class="res"></ul>
+        <details class="log"><summary>Ver proceso en vivo</summary><pre class="console" id="log_share">(sin datos)</pre></details>
+      </div>
+    </div>
+  </section>
 
-      <section id="t_compartir">
-        <div class="seg" id="segshare">
-          <button data-mode="post" class="active">Post existente</button>
-          <button data-mode="text">Texto nuevo</button>
-        </div>
+  <section id="t_comentar">
+    <div class="card">
+      <h2>Comentar</h2>
+      <p class="hint">Comenta un post (por link) o deja que el comentario sea automático.</p>
+      <label for="curl">Link del post (opcional)</label><input id="curl" placeholder="https://www.facebook.com/…">
+      <div class="row">
+        <div><label for="cmode">Modo</label><select id="cmode"><option value="auto">auto</option><option value="fixed">texto fijo</option></select></div>
+        <div><label for="cint">Cada</label><select id="cint"><option value="0">una vez</option><option value="3">3 min</option><option value="5">5 min</option><option value="10">10 min</option></select></div>
+        <div><label for="ccount">Cantidad</label><input id="ccount" type="number" min="1" value="1"></div>
+      </div>
+      <label for="ctext">Texto (si es fijo)</label><textarea id="ctext"></textarea>
+      <label class="chk"><input id="cdry" type="checkbox" checked>Simulación (no publica)</label>
+      <div class="bar" id="bar_com"><i></i></div>
+      <div class="btnrow"><button id="cstart" class="btn">COMENTAR</button><button id="cstop" class="btn stop">DETENER</button></div>
+      <div id="cstatus" class="status"></div>
+      <ul id="cresults" class="res"></ul>
+      <details class="log"><summary>Ver proceso en vivo</summary><pre class="console" id="log_com">(sin datos)</pre></details>
+    </div>
+  </section>
 
-        <div id="m_post">
-          <h2>Compartir una publicación</h2>
-          <label>Enlace del post</label>
-          <input id="purl" type="text" placeholder="https://www.facebook.com/..." />
-          <label>Texto que identifica el post (para no equivocar)</label>
-          <input id="pexpect" type="text" placeholder="ej. Barber / una palabra del título" />
-          <label>Grupos (filtro por coma o nombres)</label>
-          <input id="pfilter" type="text" placeholder="playa del carmen, guadalupan" />
-          <label>Límite (0 = todos)</label>
-          <input id="plimit" type="number" min="0" value="3" />
-          <label>Texto extra (opcional)</label>
-          <textarea id="ptext" placeholder="Comentario que acompaña al compartido"></textarea>
-          <div class="chk"><input type="checkbox" id="pdry" checked /> Simulación (no publica)</div>
-          <div class="row">
-            <button id="pstart" class="act">COMPARTIR POST</button>
-            <button id="pstop" class="ghost">DETENER</button>
-          </div>
-          <div id="pstatus" class="status">—</div>
-          <div id="presults" class="results"></div>
-        </div>
-
-        <div id="m_text" style="display: none">
-          <h2>Compartir un texto nuevo</h2>
-          <label>Grupos (filtro por coma)</label>
-          <input id="gfilter" type="text" placeholder="playa del carmen, guadalupan" />
-          <label>Límite (0 = todos)</label>
-          <input id="glimit" type="number" min="0" value="3" />
-          <label>Texto a publicar en cada grupo</label>
-          <textarea id="gtext" placeholder="Texto que se publicará en cada grupo"></textarea>
-          <div class="chk"><input type="checkbox" id="gdry" checked /> Simulación (no publica)</div>
-          <div class="row">
-            <button id="gstart" class="act">COMPARTIR TEXTO</button>
-            <button id="gstop" class="ghost">DETENER</button>
-          </div>
-          <div id="gstatus" class="status">—</div>
-          <div id="gresults" class="results"></div>
-        </div>
-      </section>
-
-      <section id="t_comentar">
-        <h2>Comentar</h2>
-        <label>Enlace (vacío = post visible)</label>
-        <input id="curl" type="text" placeholder="https://www.facebook.com/..." />
-        <label>Modo</label>
-        <select id="cmode">
-          <option value="auto">auto (frase breve)</option>
-          <option value="fixed">texto fijo (abajo)</option>
-        </select>
-        <textarea id="ctext" placeholder="Texto del comentario (si eliges 'texto fijo')"></textarea>
-        <label>Intervalo</label>
-        <select id="cint">
-          <option value="0">una vez</option>
-          <option value="3">cada 3 min</option>
-          <option value="5">cada 5 min</option>
-          <option value="10">cada 10 min</option>
-        </select>
-        <label>Cantidad</label>
-        <input id="ccount" type="number" min="1" value="1" />
-        <div class="chk"><input type="checkbox" id="cdry" checked /> Simulación (no publica)</div>
-        <div class="row">
-          <button id="cstart" class="act">COMENTAR</button>
-          <button id="cstop" class="ghost">DETENER</button>
-        </div>
-        <div id="cstatus" class="status">—</div>
-        <div id="cresults" class="results"></div>
-      </section>
-
-      <section id="t_ajustes">
-        <h2>Servidor</h2>
-        <label>Servidor</label>
-        <input id="server" type="text" placeholder="http://127.0.0.1:8799" />
-        <label>Token (opcional)</label>
-        <input id="token" type="text" placeholder="vacío = solo localhost" />
-        <div class="row">
-          <button id="save" class="act">Guardar</button>
-          <button id="test2" class="ghost">Probar</button>
-        </div>
-        <h2>Grupos</h2>
-        <div class="row">
-          <button id="grscan" class="act">ESCANEAR GRUPOS</button>
-        </div>
-        <div id="grstatus" class="status">—</div>
-      </section>
-    </main>
-    <script src="popup.js"></script>
-  </body>
+  <section id="t_ajustes">
+    <div class="card">
+      <h2>Conexión</h2>
+      <label for="server">Servidor</label><input id="server" placeholder="http://127.0.0.1:8799">
+      <label for="token">Token (opcional)</label><input id="token" type="password">
+      <div class="btnrow"><button id="save" class="btn">GUARDAR</button><button id="test2" class="btn sec">PROBAR</button></div>
+    </div>
+    <div class="card">
+      <h2>Grupos escaneados</h2>
+      <div id="grstatus" class="status">sin escanear</div>
+      <div class="bar" id="bar_grp"><i></i></div>
+      <div class="btnrow"><button id="grscan" class="btn">ESCANEAR GRUPOS</button></div>
+      <details class="log"><summary>Ver proceso en vivo</summary><pre class="console" id="log_grp">(sin datos)</pre></details>
+    </div>
+    <div class="card">
+      <h2>Peligro</h2>
+      <button id="stopall2" class="btn stop">DETENER TODO</button>
+    </div>
+  </section>
+</main>
+<script src="popup.js"></script>
+</body>
 </html>

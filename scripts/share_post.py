@@ -58,6 +58,10 @@ def sleep(ms):
     time.sleep(ms / 1000.0)
 
 
+def log(msg):
+    print("%s %s" % (time.strftime("%H:%M:%S"), msg), flush=True)
+
+
 def wait_js(expr, tries=12, interval=0.3):
     for _ in range(max(1, tries)):
         r = cdp(expr)
@@ -306,7 +310,7 @@ def search_and_select(name):
 def submit(dry, text=""):
     aud = cdp(JS_AUDIENCE)
     if aud and aud.get("chips") and not aud.get("group"):
-        print("   ABORTO: la audiencia no es un grupo ->", aud.get("chips"))
+        log("   ABORTO: la audiencia no es un grupo -> %s" % aud.get("chips"))
         return {"ok": False, "stage": "audience"}
     if text:
         call("cdptype", {"tabId": TAB, "text": text})
@@ -359,6 +363,7 @@ def share_url_group(url, g, dry, text, expect=""):
     global EXPECT
     EXPECT = expect or ""
     if url:
+        log("abro la publicacion: %s" % url)
         goto(url)
         ok = False
         for _ in range(20):
@@ -369,6 +374,7 @@ def share_url_group(url, g, dry, text, expect=""):
         if not ok:
             cur = cdp("location.href") or ""
             base = cur.split("#")[0].split("?")[0]
+            log("aun no veo el post; reintento por permalink: %s" % (base or url))
             goto(base or url)
             for _ in range(20):
                 if cdp(js_find_share(EXPECT)):
@@ -376,26 +382,38 @@ def share_url_group(url, g, dry, text, expect=""):
                     break
                 sleep(250)
         if not ok:
+            log("ERROR: no pude confirmar la publicacion (identity)")
             return {"ok": False, "stage": "identity"}
     elif not context_ok(expect):
+        log("ERROR: el post visible no coincide con '%s' (identity)" % expect)
         return {"ok": False, "stage": "identity"}
     return share_one(g, dry, text)
 
 
 def share_one(g, dry, text=""):
-    for _ in range(3):
+    for attempt in range(1, 4):
+        log("  intento %d/3: abrir menu Compartir" % attempt)
         if not open_share():
+            log("  no se abrio el menu Compartir")
             sleep(1200)
             continue
+        log("  eligiendo 'Compartir en un grupo'")
         if not open_group_option():
+            log("  no aparecio el selector de grupos")
             close_dialog()
             sleep(1200)
             continue
+        log("  buscando el grupo: %s" % g)
         if not search_and_select(g):
+            log("  no encontre el grupo en el buscador")
             close_dialog()
             sleep(1200)
             continue
-        return submit(dry, text)
+        log("  pulsando Publicar (simulacro=%s)" % dry)
+        r = submit(dry, text)
+        log("  resultado: %s" % json.dumps(r, ensure_ascii=False))
+        return r
+    log("  AGOTADO: no se pudo completar")
     return {"ok": False, "stage": "retry-exhausted"}
 
 
@@ -455,7 +473,9 @@ def run_from_cmd(path):
     st = {"running": True, "dry": dry, "total": len(groups), "done": 0, "published": 0,
           "current": "", "results": [], "started_at": int(time.time() * 1000), "finished_at": 0}
     write_status(st)
+    log("=== COMPARTIR POST: %d grupos | simulacro=%s | identificar=%r ===" % (len(groups), dry, cfg.get("expect") or ""))
     if not groups:
+        log("sin grupos (revisa el filtro o los ids)")
         st.update(running=False, error="sin grupos (revisa filter/ids)", finished_at=int(time.time() * 1000))
         write_status(st)
         return
@@ -473,6 +493,7 @@ def run_from_cmd(path):
         st["current"] = g
         st["done"] = i
         write_status(st)
+        log("[%d/%d] %s" % (i + 1, len(groups), g))
         step = {"group": g}
         step.update(share_url_group(url, g, dry, text, cfg.get("expect") or ""))
         if step.get("ok") and not dry:
@@ -485,6 +506,7 @@ def run_from_cmd(path):
             sleep(int(delay * 1000))
     st.update(running=False, current="", finished_at=int(time.time() * 1000))
     write_status(st)
+    log("=== FIN: %d/%d publicados ===" % (st.get("published", 0), len(groups)))
 
 
 def main():
@@ -506,14 +528,16 @@ def main():
     ensure_tab()
     groups = [g.strip() for g in a.ids.split(",") if g.strip()]
     results = []
+    log("=== COMPARTIR POST: %d grupos | simulacro=%s ===" % (len(groups), a.dry))
     for i, g in enumerate(groups):
-        print(f"[{i+1}/{len(groups)}] {g}")
+        log("[%d/%d] %s" % (i + 1, len(groups), g))
         step = {"group": g}
         step.update(share_url_group(a.url, g, a.dry, a.text, a.expect))
         results.append(step)
         if i < len(groups) - 1:
             close_dialog()
             sleep(int(delay_seconds(a.delay) * 1000))
+    log("=== FIN ===")
     print(json.dumps({"dry": a.dry, "results": results}, ensure_ascii=False))
 
 

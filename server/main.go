@@ -235,7 +235,7 @@ func stopJob(pidFile string) {
 // startDetached lanza `setsid python3 <script> [args...]` con la salida al log
 // indicado y devuelve el pid. El daemon no espera al hijo (lo reapea el SO).
 func startDetached(script, logPath string, args ...string) (int, error) {
-	argv := append([]string{"python3", script}, args...)
+	argv := append([]string{"python3", "-u", script}, args...)
 	cmd := exec.Command("setsid", argv...)
 	var logf *os.File
 	if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
@@ -592,6 +592,41 @@ func allScriptsOK() bool {
 	return true
 }
 
+var jobLogs = map[string]string{
+	"share":     "/tmp/cxt_share.log",
+	"sharepost": "/tmp/cxt_share_post.log",
+	"comment":   "/tmp/cxt_comment.log",
+	"groupscan": "/tmp/cxt_groupscan.log",
+	"scheduler": "/tmp/cxt_sched.log",
+}
+
+// handleLog devuelve las ultimas N lineas del log del trabajo.
+func (s *server) handleLog(w http.ResponseWriter, r *http.Request) {
+	if !s.auth(w, r) {
+		return
+	}
+	job := r.URL.Query().Get("job")
+	p, ok := jobLogs[job]
+	if !ok {
+		writeJSON(w, 400, map[string]any{"ok": false, "error": "job desconocido"})
+		return
+	}
+	n := 200
+	if v, err := strconv.Atoi(r.URL.Query().Get("n")); err == nil && v > 0 && v <= 1000 {
+		n = v
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"ok": true, "job": job, "lines": []string{}, "empty": true})
+		return
+	}
+	all := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(all) > n {
+		all = all[len(all)-n:]
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "job": job, "lines": all, "n": len(all)})
+}
+
 func jobRoute(get, set http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -629,6 +664,7 @@ func main() {
 	mux.HandleFunc("/comment", jobRoute(s.handleCommentGet, s.handleCommentSet))
 	mux.HandleFunc("/groupscan", jobRoute(s.handleGroupScanGet, s.handleGroupScanSet))
 	mux.HandleFunc("/selftest", s.handleSelfTest)
+	mux.HandleFunc("/log", s.handleLog)
 	mux.HandleFunc("/stat", s.handleStat)
 	mux.HandleFunc("/next", s.handleNext)
 	mux.HandleFunc("/result", s.handleResult)

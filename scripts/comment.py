@@ -268,8 +268,13 @@ def write_status(d):
         pass
 
 
+def log(msg):
+    print("%s %s" % (time.strftime("%H:%M:%S"), msg), flush=True)
+
+
 def comment_once(text, url, only_text=None, dry=False):
     if url:
+        log("abro: %s" % url)
         call("navigate", {"tabId": TAB, "url": url, "timeout": 45000})
         sleep(4200)
     focused = False
@@ -301,16 +306,19 @@ def comment_once(text, url, only_text=None, dry=False):
                 break
             act = cdp(JS_ACTION_COMMENT)
     if not focused:
+        log("no encontre la caja de comentario")
         return {"ok": False, "stage": "no-focus"}
     cdp(JS_CLEAR)
     call("cdptype", {"tabId": TAB, "text": text})
     sleep(900)
     got = cdp(JS_BOX_TEXT)
     if not got:
+        log("no pude escribir el comentario")
         return {"ok": False, "stage": "type-failed"}
     if dry:
         cdp(JS_CLEAR)
         call("cdpkey", {"tabId": TAB, "key": "Escape"})
+        log("simulacro: escrito -> %s" % got[:60])
         return {"ok": True, "dry": True, "typed": got, "key": ((tgt or {}).get("key") or "")[:80]}
     sub = cdp(JS_SUBMIT_COMMENT)
     if sub:
@@ -320,6 +328,7 @@ def comment_once(text, url, only_text=None, dry=False):
     sleep(2200)
     left = cdp(JS_BOX_TEXT)
     ok = (left == "") or (text[:20] not in (left or ""))
+    log("comentario %s" % ("enviado" if ok else "no confirmado"))
     return {"ok": bool(ok), "posted": bool(ok), "key": ((tgt or {}).get("key") or "")[:80], "submit": ("button" if sub else "enter")}
 
 
@@ -335,6 +344,7 @@ def run_from_cmd(path):
     st = {"running": True, "dry": dry, "total": count, "done": 0, "posted": 0,
           "current": "", "results": [], "started_at": int(time.time() * 1000), "finished_at": 0}
     write_status(st)
+    log("=== COMENTAR: %d veces | simulacro=%s ===" % (count, dry))
 
     import signal
     def on_term(*_):
@@ -351,6 +361,7 @@ def run_from_cmd(path):
         st["current"] = msg[:60]
         st["done"] = i
         write_status(st)
+        log("[%d/%d] %s" % (i + 1, count, msg[:70]))
         step = {"i": i + 1, "text": msg[:80]}
         step.update(comment_once(msg, url, dry=dry))
         if step.get("ok") and not dry:
@@ -364,6 +375,7 @@ def run_from_cmd(path):
             time.sleep(interval * 60)
     st.update(running=False, current="", finished_at=int(time.time() * 1000))
     write_status(st)
+    log("=== FIN: %d/%d ===" % (st.get("posted", 0), count))
 
 
 def main():

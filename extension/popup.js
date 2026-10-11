@@ -1,338 +1,303 @@
 const $ = (id) => document.getElementById(id);
-const DEF = { server: "http://127.0.0.1:8799", token: "", enabled: true };
-const FIELDS = [
-  "server", "token", "sint", "scount", "stopic", "stext",
+const FIELDS = ["server", "token", "sint", "scount", "stopic", "stext",
   "purl", "pexpect", "pfilter", "plimit", "ptext", "pdry",
   "gfilter", "glimit", "gtext", "gdry",
-  "curl", "cmode", "ctext", "cint", "ccount", "cdry",
-];
-let enabled = true;
+  "curl", "cmode", "ctext", "cint", "ccount", "cdry"];
+const JOB = { pub: "scheduler", sharepost: "sharepost", share: "share", com: "comment", grp: "groupscan" };
+
+let tab = "estado";
+let mode = "post";
+let form = {};
 let busy = false;
-let tick = 0;
-let activeTab = "estado";
 
-const send = (m) => chrome.runtime.sendMessage(m).catch(() => null);
-
-function tabOf() {
-  const b = document.querySelector("nav button.active");
-  return b ? b.dataset.tab : "estado";
+function send(type, value, query) {
+  return new Promise((res) => {
+    try {
+      chrome.runtime.sendMessage({ type, value, query }, (r) => {
+        if (chrome.runtime.lastError) res({ ok: false, error: chrome.runtime.lastError.message });
+        else res(r || { ok: false, error: "sin respuesta" });
+      });
+    } catch (e) { res({ ok: false, error: String(e) }); }
+  });
 }
 
-function saveForm() {
-  const form = {};
-  for (const id of FIELDS) {
-    const el = $(id);
-    if (!el) continue;
-    form[id] = el.type === "checkbox" ? el.checked : el.value;
-  }
-  chrome.storage.local.set({ form, tab: tabOf() });
-}
+function saveForm() { chrome.storage.local.set({ form, tab }); }
 
-function paint() {
-  const b = $("power");
-  b.className = enabled ? "on" : "off";
-  b.textContent = enabled ? "● ACTIVADA" : "● DESACTIVADA";
-}
-
-async function load() {
-  const c = await chrome.storage.local.get({ ...DEF, form: {}, tab: "estado" });
-  enabled = c.enabled;
-  const f = c.form || {};
-  for (const id of FIELDS) {
-    const el = $(id);
-    if (!el) continue;
-    if (el.type === "checkbox") el.checked = f[id] != null ? f[id] : el.checked;
-    else if (f[id] != null) el.value = f[id];
-  }
-  paint();
-  showTab(c.tab || "estado");
-  await refreshAll();
+function bindFields() {
+  FIELDS.forEach((f) => {
+    const el = $(f);
+    if (!el) return;
+    if (el.type === "checkbox") el.checked = !!form[f];
+    else if (form[f] !== undefined && form[f] !== null) el.value = form[f];
+    const ev = (el.type === "checkbox" || el.tagName === "SELECT") ? "change" : "input";
+    el.addEventListener(ev, () => { form[f] = el.type === "checkbox" ? el.checked : el.value; saveForm(); });
+  });
 }
 
 function showTab(t) {
-  activeTab = t;
-  document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("active", x.dataset.tab === t));
-  document.querySelectorAll("main section").forEach((s) => s.classList.toggle("active", s.id === "t_" + t));
-  if (t === "publicar") renderSched();
-  else if (t === "compartir") { renderSharePost(); renderShare(); }
-  else if (t === "comentar") renderComment();
-  else if (t === "ajustes") renderGroups();
-}
-
-function renderResults(el, items, fmt) {
-  if (!items || !items.length) { el.innerHTML = ""; return; }
-  const shown = items.slice(-12);
-  el.innerHTML = shown
-    .map((it) => {
-      const ok = it.ok !== false;
-      return `<div><span class="${ok ? "ok" : "bad"}">${ok ? "✓" : "✗"}</span> ${fmt(it)}</div>`;
-    })
-    .join("");
-}
-
-const esc = (s) => String(s || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
-
-/* ---------- estado ---------- */
-async function render() {
-  const s = await send({ type: "status" });
-  const last = (await chrome.storage.local.get({ last: null })).last;
-  const dot = $("dot");
-  dot.className = "dot" + (s && s.running ? " on-dot" : enabled ? "" : " off-dot");
-  if (s) { enabled = s.enabled; paint(); }
-  $("conn").textContent = s ? (s.running ? "en línea" : "worker dormido") : "sin worker";
-  let t = s
-    ? `polling=${s.running} · activo=${s.enabled}`
-    : "sin respuesta del worker";
-  if (last) t += `\núltimo: ${last.op} ${last.ok ? "OK" : "ERR " + (last.error || "")} @ ${new Date(last.at).toLocaleTimeString()}`;
-  $("status").textContent = t;
-}
-
-/* ---------- publicar ---------- */
-async function renderSched() {
-  const s = await send({ type: "schedGet" });
-  const el = $("sstatus");
-  $("b_pub").classList.toggle("show", !!(s && s.enabled));
-  if (!s || s.error) { el.textContent = s && s.error ? "error: " + s.error : "sin datos"; return; }
-  let t = `${s.enabled ? "PUBLICANDO" : "detenido"} · quedan ${s.remaining != null ? s.remaining : "?"} · ${s.alive ? "motor OK" : "motor PARADO"}`;
-  if (s.enabled && s.next_at) t += `\npróxima: ${new Date(s.next_at).toLocaleTimeString()}`;
-  if (s.last) t += `\núltima: ${s.last.ok ? "OK" : "ERR " + (s.last.error || "")} @ ${new Date(s.last.at).toLocaleTimeString()}`;
-  el.textContent = t;
-}
-
-/* ---------- compartir texto nuevo ---------- */
-async function renderShare() {
-  const s = await send({ type: "shareGet" });
-  const el = $("gstatus");
-  if (!s || s.error) { el.textContent = s && s.error ? "error: " + s.error : "sin datos"; return; }
-  if (!s.total) { el.textContent = "sin ejecuciones"; renderResults($("gresults"), [], () => ""); return; }
-  let t = `${s.running ? "COMPARTIENDO" : "terminado"} ${s.done || 0}/${s.total} · OK ${s.published || 0}`;
-  if (s.dry) t += " · SIMULACIÓN";
-  if (s.current) t += `\nactual: ${s.current}`;
-  el.textContent = t;
-  renderResults($("gresults"), s.results, (r) => esc(r.name || r.group || ""));
-}
-
-/* ---------- compartir publicación ---------- */
-async function renderSharePost() {
-  const s = await send({ type: "sharePostGet" });
-  const el = $("pstatus");
-  $("b_share").classList.toggle("show", !!((s && s.running) || (s && s.total && s.running)));
-  if (!s || s.error) { el.textContent = s && s.error ? "error: " + s.error : "sin datos"; return; }
-  if (!s.total) { el.textContent = s.running ? "iniciando…" : "sin ejecuciones"; renderResults($("presults"), [], () => ""); return; }
-  let t = `${s.running ? "COMPARTIENDO" : "terminado"} ${s.done || 0}/${s.total} · OK ${s.published || 0}`;
-  if (s.dry) t += " · SIMULACIÓN";
-  if (s.error) t += `\n${s.error}`;
-  if (s.current) t += `\nactual: ${s.current}`;
-  el.textContent = t;
-  renderResults($("presults"), s.results, (r) => esc(r.group || "") + (r.stage ? ` <span class="hint">(${esc(r.stage)})</span>` : ""));
-}
-
-/* ---------- comentar ---------- */
-async function renderComment() {
-  const s = await send({ type: "commentGet" });
-  const el = $("cstatus");
-  if (!s || s.error) { el.textContent = s && s.error ? "error: " + s.error : "sin datos"; return; }
-  if (!s.total) { el.textContent = s.running ? "iniciando…" : "sin ejecuciones"; renderResults($("cresults"), [], () => ""); return; }
-  let t = `${s.running ? "COMENTANDO" : "terminado"} ${s.done || 0}/${s.total} · OK ${s.posted || 0}`;
-  if (s.dry) t += " · SIMULACIÓN";
-  if (s.error) t += `\n${s.error}`;
-  if (s.current) t += `\n${s.current}`;
-  el.textContent = t;
-  renderResults($("cresults"), s.results, (r) => `#${r.i} ${esc((r.text || r.typed || "").slice(0, 60))}`);
-}
-
-/* ---------- grupos ---------- */
-async function renderGroups() {
-  const g = await send({ type: "groupscanGet" });
-  const el = $("grstatus");
-  if (!g || g.error) { el.textContent = g && g.error ? "error: " + g.error : "sin datos"; return; }
-  if (g.alive) { $("b_grp").classList.add("show"); el.textContent = "escaneando… (tarda unos minutos)"; return; }
-  $("b_grp").classList.remove("show");
-  if (!g.count) { el.textContent = "sin grupos; pulsa ESCANEAR"; return; }
-  const c = g.categories || {};
-  const cats = Object.keys(c).map((k) => `${k}:${c[k]}`).join(" · ");
-  el.textContent = `${g.count} grupos\n${cats}`;
-}
-
-/* ---------- acciones ---------- */
-$("power").addEventListener("click", async () => {
-  const next = !enabled;
-  const r = await send({ type: "setEnabled", value: next });
-  enabled = r && typeof r.enabled === "boolean" ? r.enabled : next;
-  paint();
-  await render();
-});
-
-async function probe() {
-  const r = await send({ type: "test" });
-  $("status").textContent = r && r.ok ? "conexión OK con cxtd" : "fallo: " + (r && (r.error || r.status));
-}
-$("test").addEventListener("click", probe);
-$("test2").addEventListener("click", probe);
-
-$("stopall").addEventListener("click", async () => {
+  tab = t;
+  document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
+  document.querySelectorAll("main section").forEach((s) => s.classList.toggle("on", s.id === "t_" + t));
   saveForm();
-  await Promise.all([
-    send({ type: "shareSet", value: { stop: true } }),
-    send({ type: "sharePostSet", value: { stop: true } }),
-    send({ type: "commentSet", value: { stop: true } }),
-    send({ type: "schedSet", value: { enabled: false } }),
-  ]);
-  $("status").textContent = "deteniendo todo…";
-  setTimeout(refreshAll, 800);
-});
-
-$("save").addEventListener("click", async () => {
-  await chrome.storage.local.set({
-    server: $("server").value.trim() || DEF.server,
-    token: $("token").value.trim(),
-  });
-  saveForm();
-  await send({ type: "start" });
-  $("status").textContent = "guardado.";
-  setTimeout(refreshAll, 300);
-});
-
-$("sstart").addEventListener("click", async () => {
-  const interval = parseFloat($("sint").value) || 5;
-  const count = Math.max(1, parseInt($("scount").value) || 1);
-  const topic = $("stopic").value === "fixed" ? ($("stext").value.trim() || "auto") : "auto";
-  if (!confirm(`¿Publicar ${count} vez/veces cada ${interval} min en tu muro?`)) return;
-  saveForm();
-  await send({ type: "schedSet", value: { enabled: true, interval_min: interval, count, topic } });
-  $("sstatus").textContent = "iniciando…";
-  setTimeout(renderSched, 700);
-});
-
-$("sstop").addEventListener("click", async () => {
-  await send({ type: "schedSet", value: { enabled: false } });
-  $("sstatus").textContent = "deteniendo…";
-  setTimeout(renderSched, 700);
-});
-
-$("gstart").addEventListener("click", async () => {
-  const filter = $("gfilter").value.trim();
-  const limit = Math.max(0, parseInt($("glimit").value) || 0);
-  const text = $("gtext").value.trim();
-  const dry = $("gdry").checked;
-  if (!text) { $("gstatus").textContent = "escribe el texto a compartir"; return; }
-  if (!filter && limit === 0) { $("gstatus").textContent = "pon un filtro de grupos o un límite > 0"; return; }
-  if (!dry && !confirm(`¿Publicar este texto en los grupos (${filter || "todos"})?`)) return;
-  saveForm();
-  await send({ type: "shareSet", value: { text, filter, limit, dry, interval_sec: 8 } });
-  $("gstatus").textContent = "iniciando…";
-  setTimeout(renderShare, 900);
-});
-
-$("gstop").addEventListener("click", async () => {
-  await send({ type: "shareSet", value: { stop: true } });
-  $("gstatus").textContent = "deteniendo…";
-  setTimeout(renderShare, 900);
-});
-
-$("pstart").addEventListener("click", async () => {
-  const url = $("purl").value.trim();
-  const expect = $("pexpect").value.trim();
-  const filter = $("pfilter").value.trim();
-  const limit = Math.max(0, parseInt($("plimit").value) || 0);
-  const text = $("ptext").value.trim();
-  const dry = $("pdry").checked;
-  if (!filter && limit === 0) { $("pstatus").textContent = "pon un filtro de grupos o un límite > 0"; return; }
-  if (!dry && !confirm(`¿Compartir la publicación en los grupos (${filter || "todos"})?`)) return;
-  saveForm();
-  await send({ type: "sharePostSet", value: { url, expect, filter, limit, dry, text, delay: 8 } });
-  $("pstatus").textContent = "iniciando…";
-  setTimeout(renderSharePost, 900);
-});
-
-$("pstop").addEventListener("click", async () => {
-  await send({ type: "sharePostSet", value: { stop: true } });
-  $("pstatus").textContent = "deteniendo…";
-  setTimeout(renderSharePost, 900);
-});
-
-$("cstart").addEventListener("click", async () => {
-  const url = $("curl").value.trim();
-  const fixed = $("cmode").value === "fixed";
-  const text = fixed ? $("ctext").value.trim() : "";
-  const auto = !fixed;
-  const interval = parseFloat($("cint").value) || 0;
-  const count = Math.max(1, parseInt($("ccount").value) || 1);
-  const dry = $("cdry").checked;
-  if (fixed && !text) { $("cstatus").textContent = "escribe el comentario"; return; }
-  if (!dry && !confirm(`¿Comentar ${count} vez/veces?`)) return;
-  saveForm();
-  await send({ type: "commentSet", value: { url, text, auto, count, interval_min: interval, dry } });
-  $("cstatus").textContent = "iniciando…";
-  setTimeout(renderComment, 900);
-});
-
-$("cstop").addEventListener("click", async () => {
-  await send({ type: "commentSet", value: { stop: true } });
-  $("cstatus").textContent = "deteniendo…";
-  setTimeout(renderComment, 900);
-});
-
-$("grscan").addEventListener("click", async () => {
-  await send({ type: "groupscanSet", value: {} });
-  $("grstatus").textContent = "escaneando…";
-  setTimeout(renderGroups, 1200);
-});
-
-/* ---------- subtabs compartir ---------- */
-function showShareMode(mode) {
-  document.querySelectorAll("#segshare button").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
-  $("m_post").style.display = mode === "post" ? "block" : "none";
-  $("m_text").style.display = mode === "text" ? "block" : "none";
+  tick();
 }
-document.querySelectorAll("#segshare button").forEach((b) =>
-  b.addEventListener("click", () => showShareMode(b.dataset.mode))
-);
 
-/* ---------- tabs ---------- */
-document.querySelectorAll("nav button").forEach((btn) =>
-  btn.addEventListener("click", () => { showTab(btn.dataset.tab); saveForm(); })
-);
+function setBar(id, done, total) {
+  const bar = $(id);
+  if (!bar) return;
+  if (total > 0) {
+    bar.classList.add("show");
+    bar.firstElementChild.style.width = (Math.max(0, Math.min(1, done / total)) * 100) + "%";
+  } else {
+    bar.classList.remove("show");
+  }
+}
 
-/* ---------- persistencia ---------- */
-for (const id of FIELDS) {
+function setBadge(id, show, text) {
+  const b = $(id);
+  if (!b) return;
+  b.textContent = text || "●";
+  b.classList.toggle("show", !!show);
+}
+
+function renderList(id, arr, fmt) {
   const el = $(id);
-  if (!el) continue;
-  el.addEventListener("change", saveForm);
-  if (el.tagName === "TEXTAREA" || el.type === "text") el.addEventListener("blur", saveForm);
+  if (!el) return;
+  el.innerHTML = "";
+  (arr || []).forEach((it) => {
+    const [ok, text] = fmt(it);
+    const li = document.createElement("li");
+    const ic = document.createElement("span");
+    ic.className = "ic " + (ok === true ? "ok" : ok === false ? "bad" : "warn");
+    ic.textContent = ok === true ? "✓" : ok === false ? "✗" : "•";
+    const sp = document.createElement("span");
+    sp.textContent = text;
+    li.appendChild(ic);
+    li.appendChild(sp);
+    el.appendChild(li);
+  });
 }
 
-/* ---------- refresco ---------- */
-async function refreshAll() {
-  await render();
-  await renderSched();
-  await renderSharePost();
-  await renderShare();
-  await renderComment();
-  await renderGroups();
+async function setLog(job, id, running) {
+  const el = $(id);
+  if (!el) return;
+  const r = await send("logGet", undefined, { job, n: 120 });
+  if (r && r.lines) {
+    el.textContent = r.lines.length ? r.lines.join("\n") : "(sin datos)";
+    el.scrollTop = el.scrollHeight;
+  }
+  const d = el.closest("details");
+  if (d && running) d.open = true;
 }
 
-async function tickFn() {
-  if (document.hidden || busy) return;
+function fmtTime(ms) {
+  if (!ms) return "";
+  try { return new Date(ms).toLocaleTimeString(); } catch (e) { return ""; }
+}
+
+function renderHeader(h) {
+  if (!h || (h.ok === false && h.error)) {
+    $("conn").textContent = "sin conexión";
+    $("dot").style.background = "var(--bad)";
+    return;
+  }
+  const on = !!h.extension_online;
+  $("dot").style.background = on ? "var(--ok)" : "var(--bad)";
+  $("conn").textContent = on ? (h.enabled ? "en línea" : "en línea · pausada") : "sin conexión";
+  const p = $("power");
+  p.textContent = h.enabled ? "● ACTIVADA" : "● DESACTIVADA";
+  p.classList.toggle("off", !h.enabled);
+}
+
+async function renderEstado() {
+  const h = await send("test");
+  const jobs = [];
+  if (h.sched_alive) jobs.push("publicar");
+  if (h.share_alive) jobs.push("grupos");
+  if (h.share_post_alive) jobs.push("compartir post");
+  if (h.comment_alive) jobs.push("comentar");
+  if (h.groupscan_alive) jobs.push("escanear");
+  $("status").textContent =
+    "Conexión: " + (h.extension_online ? "OK" : "sin extensión") + " · scripts: " + (h.scripts_ok ? "OK" : "FALTAN") + "\n" +
+    "Trabajos activos: " + (jobs.length ? jobs.join(", ") : "ninguno") +
+    (h.enabled ? "" : "\n⚠ Interruptor en DESACTIVADA");
+  const [a, b, c, d] = await Promise.all([send("schedGet"), send("shareGet"), send("sharePostGet"), send("commentGet")]);
+  const lines = [];
+  if (a && a.last) lines.push("Publicar: " + (a.last.ok ? "✓" : "✗") + " " + fmtTime(a.last.at) + (a.last.error ? " · " + a.last.error : ""));
+  if (b && b.total) lines.push("Grupos: " + (b.published || 0) + "/" + b.total + (b.running ? " (en curso)" : ""));
+  if (c && c.total) lines.push("Compartir post: " + (c.published || 0) + "/" + c.total + (c.running ? " (en curso)" : ""));
+  if (d && d.total) lines.push("Comentar: " + (d.posted || 0) + "/" + d.total + (d.running ? " (en curso)" : ""));
+  $("acts").textContent = lines.length ? lines.join("\n") : "sin actividad";
+}
+
+async function renderPub() {
+  const s = await send("schedGet");
+  const total = +s.count || 0;
+  const done = Math.max(0, total - (+s.remaining || 0));
+  setBar("bar_pub", s.enabled ? done : total, total);
+  let t = s.enabled ? "PUBLICANDO · quedan " + s.remaining + "/" + s.count : "detenido";
+  if (s.sched_alive === false) t += " · motor PARADO";
+  if (s.enabled && s.next_at) t += " · próximo " + fmtTime(s.next_at);
+  if (s.last && s.last.error) t += "\núltimo error: " + s.last.error;
+  $("sstatus").textContent = t;
+  setBadge("b_pub", !!s.enabled, s.enabled ? done + "/" + total : "");
+  await setLog(JOB.pub, "log_pub", !!s.enabled);
+}
+
+async function renderSharePost() {
+  const s = await send("sharePostGet");
+  setBar("bar_sharepost", s.done || 0, s.total || 0);
+  $("pstatus").textContent = s.total
+    ? (s.running ? "compartiendo…" : "terminado") + " · " + (s.published || 0) + "/" + s.total + (s.current ? "\nahora: " + s.current : "")
+    : "sin ejecutar";
+  renderList("presults", s.results, (r) => [r.ok, (r.group || "") + (r.stage && !r.ok ? "  (" + r.stage + ")" : "") + (r.dry ? "  [simulacro]" : "")]);
+  setBadge("b_share", s.running || (s.total && (s.published || 0) < s.total), s.total ? (s.done || 0) + "/" + s.total : "");
+  await setLog(JOB.sharepost, "log_sharepost", !!s.running);
+}
+
+async function renderShare() {
+  const s = await send("shareGet");
+  setBar("bar_share", s.done || 0, s.total || 0);
+  $("gstatus").textContent = s.total
+    ? (s.running ? "publicando…" : "terminado") + " · " + (s.published || 0) + "/" + s.total + (s.current ? "\nahora: " + s.current : "")
+    : "sin ejecutar";
+  renderList("gresults", s.results, (r) => [r.ok, (r.name || "") + (r.stage && !r.ok ? "  (" + r.stage + ")" : "")]);
+  await setLog(JOB.share, "log_share", !!s.running);
+}
+
+async function renderComment() {
+  const s = await send("commentGet");
+  setBar("bar_com", s.done || 0, s.total || 0);
+  $("cstatus").textContent = s.total
+    ? (s.running ? "comentando…" : "terminado") + " · " + (s.posted || 0) + "/" + s.total + (s.current ? "\nahora: " + s.current : "")
+    : "sin ejecutar";
+  renderList("cresults", s.results, (r) => [r.ok, "#" + r.i + " " + (r.text || "") + (r.stage && !r.ok ? "  (" + r.stage + ")" : "")]);
+  setBadge("b_com", !!s.running, s.total ? (s.done || 0) + "/" + s.total : "");
+  await setLog(JOB.com, "log_com", !!s.running);
+}
+
+async function renderGroups() {
+  const g = await send("groupscanGet");
+  $("grstatus").textContent = g.count ? (g.count + " grupos · " + (g.scanned_at || "")) : "sin escanear";
+  setBadge("b_grp", !!g.alive, "…");
+  await setLog(JOB.grp, "log_grp", !!g.alive);
+}
+
+async function tick() {
+  if (busy) return;
   busy = true;
   try {
-    await render();
-    const t = tabOf();
-    if (t === "publicar") await renderSched();
-    else if (t === "compartir") { await renderSharePost(); await renderShare(); }
-    else if (t === "comentar") await renderComment();
-    else if (t === "ajustes") await renderGroups();
-    tick++;
-    if (tick % 4 === 0) {
-      if (t !== "publicar") await renderSched();
-      if (t !== "compartir") { await renderSharePost(); await renderShare(); }
-      if (t !== "comentar") await renderComment();
-    }
-    if (tick % 12 === 0) await renderGroups();
+    const h = await send("test");
+    renderHeader(h);
+    if (tab === "estado") await renderEstado();
+    else if (tab === "publicar") await renderPub();
+    else if (tab === "compartir") { if (mode === "post") await renderSharePost(); else await renderShare(); }
+    else if (tab === "comentar") await renderComment();
+    else if (tab === "ajustes") await renderGroups();
   } finally {
     busy = false;
   }
 }
 
+function needConfirm(dry) {
+  return !dry && !confirm("Esto publicará de verdad en Facebook. ¿Continuar?");
+}
+
+async function doTest() {
+  const h = await send("test");
+  $("status").textContent = (h.extension_online ? "✓ conexión OK" : "✗ sin extensión") + "\n" + JSON.stringify(h).slice(0, 240);
+  if (tab !== "estado") showTab("estado");
+}
+
+function wire() {
+  document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+
+  document.querySelectorAll("#segshare button").forEach((b) => b.addEventListener("click", () => {
+    mode = b.dataset.mode;
+    document.querySelectorAll("#segshare button").forEach((x) => x.classList.toggle("on", x === b));
+    $("m_post").style.display = mode === "post" ? "" : "none";
+    $("m_text").style.display = mode === "text" ? "" : "none";
+    saveForm();
+    tick();
+  }));
+
+  $("power").addEventListener("click", async () => {
+    const h = await send("test");
+    const r = await send("setEnabled", !h.enabled);
+    if (r && r.error) alert("Error: " + r.error);
+    tick();
+  });
+
+  $("test").addEventListener("click", doTest);
+  $("test2").addEventListener("click", doTest);
+
+  $("save").addEventListener("click", async () => {
+    form.server = $("server").value;
+    form.token = $("token").value;
+    await chrome.storage.local.set({ server: form.server, token: form.token, form });
+    await send("start");
+    tick();
+  });
+
+  async function stopAll() {
+    if (!confirm("¿Detener publicar, compartir y comentar?")) return;
+    await send("schedSet", { enabled: false });
+    await send("shareSet", { stop: true });
+    await send("sharePostSet", { stop: true });
+    await send("commentSet", { stop: true });
+    tick();
+  }
+  $("stopall").addEventListener("click", stopAll);
+  $("stopall2").addEventListener("click", stopAll);
+
+  $("sstart").addEventListener("click", async () => {
+    await send("schedSet", { enabled: true, interval_min: +$("sint").value, count: +$("scount").value || 1, topic: $("stopic").value, text: $("stext").value });
+    tick();
+  });
+  $("sstop").addEventListener("click", async () => { await send("schedSet", { enabled: false }); tick(); });
+
+  $("pstart").addEventListener("click", async () => {
+    const dry = $("pdry").checked;
+    if (needConfirm(dry)) return;
+    await send("sharePostSet", { url: $("purl").value, expect: $("pexpect").value, filter: $("pfilter").value, limit: +$("plimit").value || 0, text: $("ptext").value, dry, delay: 8 });
+    tick();
+  });
+  $("pstop").addEventListener("click", async () => { await send("sharePostSet", { stop: true }); tick(); });
+
+  $("gstart").addEventListener("click", async () => {
+    const dry = $("gdry").checked;
+    if (needConfirm(dry)) return;
+    await send("shareSet", { filter: $("gfilter").value, limit: +$("glimit").value || 0, text: $("gtext").value, dry, interval_sec: 8 });
+    tick();
+  });
+  $("gstop").addEventListener("click", async () => { await send("shareSet", { stop: true }); tick(); });
+
+  $("cstart").addEventListener("click", async () => {
+    const dry = $("cdry").checked;
+    if (needConfirm(dry)) return;
+    const fixed = $("cmode").value === "fixed";
+    await send("commentSet", { url: $("curl").value, text: fixed ? $("ctext").value : "", auto: !fixed, count: +$("ccount").value || 1, interval_min: +$("cint").value || 0, dry });
+    tick();
+  });
+  $("cstop").addEventListener("click", async () => { await send("commentSet", { stop: true }); tick(); });
+
+  $("grscan").addEventListener("click", async () => { await send("groupscanSet", {}); tick(); });
+
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
+}
+
+async function load() {
+  const st = await chrome.storage.local.get(["form", "tab", "server", "token"]);
+  form = st.form || {};
+  if (st.server && form.server === undefined) form.server = st.server;
+  if (st.token && form.token === undefined) form.token = st.token;
+  if (st.tab) tab = st.tab;
+  bindFields();
+  document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
+  document.querySelectorAll("main section").forEach((s) => s.classList.toggle("on", s.id === "t_" + tab));
+  wire();
+  tick();
+  setInterval(tick, 1500);
+}
+
 load();
-setInterval(tickFn, 1500);

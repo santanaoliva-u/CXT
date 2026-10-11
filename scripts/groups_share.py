@@ -134,16 +134,22 @@ def composer_rect(tries=20):
     return None
 
 
+def log(msg):
+    print("%s %s" % (time.strftime("%H:%M:%S"), msg), flush=True)
+
+
 def post_to_group(g, text, dry=False):
     call("tab.activate", {"tabId": TAB})
     time.sleep(0.6)
     clear_draft()
+    log("abro el grupo: %s" % g["name"])
     call("navigate", {"tabId": TAB, "url": g["href"], "timeout": 45000})
     time.sleep(4.0)
     call("scroll", {"x": 0, "y": -200000, "tabId": TAB})
     time.sleep(0.8)
     comp = composer_rect()
     if not comp:
+        log("no encontre el compositor del grupo")
         return {"name": g["name"], "ok": False, "stage": "composer"}
     pub = None
     for _try in range(3):
@@ -155,6 +161,7 @@ def post_to_group(g, text, dry=False):
             break
         comp = composer_rect(tries=6) or comp
     if not pub:
+        log("no aparecio el dialogo de publicacion")
         call("cdpkey", {"key": "Escape", "tabId": TAB})
         return {"name": g["name"], "ok": False, "stage": "dialog"}
     if not call("type", {"value": text, "tabId": TAB}).get("typed"):
@@ -164,6 +171,7 @@ def post_to_group(g, text, dry=False):
     if dry:
         call("cdpkey", {"key": "Escape", "tabId": TAB})
         time.sleep(0.5)
+        log("simulacro OK")
         return {"name": g["name"], "ok": True, "dry": True, "pub": [pub["x"], pub["y"], pub["w"], pub["h"]]}
     for _attempt in range(2):
         pub = bring_exact("publicar", 200, 30, 95, tries=8) or pub
@@ -171,7 +179,9 @@ def post_to_group(g, text, dry=False):
         for _ in range(30):
             time.sleep(0.7)
             if not find_exact("publicar", 200, 30, 95):
+                log("publicado")
                 return {"name": g["name"], "ok": True, "pub": [pub["x"], pub["y"], pub["w"], pub["h"]]}
+    log("no pude confirmar la publicacion")
     return {"name": g["name"], "ok": False, "stage": "verify", "pub": [pub["x"], pub["y"], pub["w"], pub["h"]]}
 
 
@@ -196,9 +206,11 @@ def job(cmd):
     st = {"running": True, "dry": dry, "total": len(sel), "done": 0, "published": 0,
           "started_at": time.time(), "finished_at": 0, "current": None, "results": []}
     write_status(st)
+    log("=== COMPARTIR EN GRUPOS: %d | simulacro=%s ===" % (len(sel), dry))
     for g in sel:
         st["current"] = g["name"]
         write_status(st)
+        log("[%d/%d] %s" % (st["done"] + 1, len(sel), g["name"]))
         try:
             r = post_to_group(g, text, dry=dry)
         except Exception as e:
@@ -213,6 +225,7 @@ def job(cmd):
     st["current"] = None
     st["finished_at"] = time.time()
     write_status(st)
+    log("=== FIN: %d/%d publicados ===" % (st.get("published", 0), len(sel)))
     try:
         os.remove(PID)
     except OSError:
