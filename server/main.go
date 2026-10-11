@@ -537,7 +537,7 @@ func (s *server) handleCmd(w http.ResponseWriter, r *http.Request) {
 	select {
 	case rm := <-ch:
 		writeJSON(w, 200, rm)
-	case <-time.After(60 * time.Second):
+	case <-time.After(120 * time.Second):
 		writeJSON(w, 200, resultMsg{ID: cm.ID, OK: false, Error: "timeout: la extension no respondio"})
 	}
 }

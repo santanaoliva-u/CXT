@@ -37,6 +37,12 @@ function hookDialogs() {
 }
 
 const pageEnabled = new Set();
+
+async function armDialog(tabId) {
+  try {
+    await cdp(tabId, "Page.enable", {});
+  } catch (e) {}
+}
 const detachTimers = new Map();
 
 function scheduleDetach(tabId) {
@@ -189,6 +195,7 @@ async function exec(op, args) {
       return { closed: args.tabId };
     case "navigate": {
       const t = await resolveTab(args);
+      await armDialog(t.id);
       await chrome.tabs.update(t.id, { url: args.url });
       await waitLoad(t.id, args.timeout || 30000);
       const nt = await chrome.tabs.get(t.id);
@@ -867,7 +874,7 @@ async function init() {
 
 chrome.runtime.onInstalled.addListener(() => init());
 chrome.runtime.onStartup.addListener(() => init());
-chrome.alarms.create("cxt-poll", { periodInMinutes: 1 });
+chrome.alarms.create("cxt-poll", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "cxt-poll") loop();
 });
