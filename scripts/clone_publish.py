@@ -51,6 +51,19 @@ def ready():
     return cdp("document.readyState") == "complete"
 
 
+def clear_drafts():
+    try:
+        call("cdpkey", {"key": "Escape", "tabId": TAB})
+        cdp(
+            "(function(){var es=document.querySelectorAll('[contenteditable=true]');"
+            "var n=0;for(var i=0;i<es.length;i++){var e=es[i];var r=e.getBoundingClientRect();"
+            "if(r.width<10||r.height<8)continue;try{e.focus();document.execCommand('selectAll');"
+            "document.execCommand('delete');}catch(x){}e.innerHTML='';n++;}return n;})()"
+        )
+    except Exception:
+        pass
+
+
 def ensure_fresh():
     want = os.environ.get("CXT_POST_URL")
     u = cur_url()
@@ -103,6 +116,7 @@ assert text, "post vacio"
 t0 = time.time()
 log("=== PUBLICAR (clone) ===")
 call("tab.activate", {"tabId": TAB})
+clear_drafts()
 ensure_fresh()
 call("cdpkey", {"key": "Escape", "tabId": TAB})
 time.sleep(0.3)

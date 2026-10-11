@@ -1,6 +1,7 @@
 // CXT background service worker (MV3). Classic script, no imports.
 const DEFAULTS = { server: "http://127.0.0.1:8799", token: "", enabled: true, maxHops: 0 };
 let running = false;
+let runningSince = 0;
 let lastStore = 0;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -37,6 +38,53 @@ function hookDialogs() {
 }
 
 const pageEnabled = new Set();
+
+const OP_TIMEOUT_MS = 25000;
+
+function withTimeout(p, ms, tag) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const to = setTimeout(() => {
+      if (done) return;
+      done = true;
+      const err = new Error("op timeout " + ms + "ms: " + tag);
+      err.timeout = true;
+      reject(err);
+    }, ms);
+    Promise.resolve(p).then(
+      (v) => {
+        if (done) return;
+        done = true;
+        clearTimeout(to);
+        resolve(v);
+      },
+      (e) => {
+        if (done) return;
+        done = true;
+        clearTimeout(to);
+        reject(e);
+      }
+    );
+  });
+}
+
+async function acceptDialog(tabId) {
+  try {
+    if (tabId == null) {
+      const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+      tabId = t && t.id;
+    }
+    if (tabId == null) return;
+    try {
+      await chrome.debugger.sendCommand({ tabId }, "Page.handleJavaScriptDialog", { accept: true });
+    } catch (e) {
+      try {
+        await chrome.debugger.attach({ tabId }, "1.3");
+        await chrome.debugger.sendCommand({ tabId }, "Page.handleJavaScriptDialog", { accept: true });
+      } catch (e2) {}
+    }
+  } catch (e) {}
+}
 
 async function armDialog(tabId) {
   try {
@@ -93,6 +141,7 @@ async function cdp(tabId, method, params) {
 async function loop() {
   if (running) return;
   running = true;
+  runningSince = Date.now();
   while (true) {
     const c = await cfg();
     if (!c.enabled) {
@@ -115,9 +164,14 @@ async function loop() {
     }
     let out;
     try {
-      out = { id: cmd.id, ok: true, data: await exec(cmd.op, cmd.args || {}) };
+      out = {
+        id: cmd.id,
+        ok: true,
+        data: await withTimeout(exec(cmd.op, cmd.args || {}), OP_TIMEOUT_MS, cmd.op),
+      };
     } catch (e) {
       out = { id: cmd.id, ok: false, error: String(e && e.message ? e.message : e) };
+      if (e && e.timeout) await acceptDialog(cmd.args && cmd.args.tabId);
     }
     if (Date.now() - lastStore > 1500) {
       lastStore = Date.now();
@@ -186,8 +240,18 @@ async function exec(op, args) {
       return { id: nt.id, url: nt.url, title: nt.title };
     }
     case "tab.activate": {
-      const t = await chrome.tabs.update(args.tabId, { active: true });
-      if (t.windowId != null) await chrome.windows.update(t.windowId, { focused: true });
+      let t;
+      try {
+        t = await withTimeout(chrome.tabs.update(args.tabId, { active: true }), 8000, "tab.activate");
+      } catch (e) {
+        await acceptDialog(args.tabId);
+        t = await withTimeout(chrome.tabs.update(args.tabId, { active: true }), 8000, "tab.activate");
+      }
+      if (t.windowId != null) {
+        try {
+          await withTimeout(chrome.windows.update(t.windowId, { focused: true }), 5000, "win.focus");
+        } catch (e) {}
+      }
       return { id: t.id, url: t.url };
     }
     case "tab.close":
@@ -196,7 +260,14 @@ async function exec(op, args) {
     case "navigate": {
       const t = await resolveTab(args);
       await armDialog(t.id);
-      await chrome.tabs.update(t.id, { url: args.url });
+      const nav = chrome.tabs.update(t.id, { url: args.url });
+      const committed = await Promise.race([nav.then(() => true), sleep(6000).then(() => false)]);
+      if (!committed) {
+        try {
+          await cdp(t.id, "Page.navigate", { url: args.url });
+        } catch (e) {}
+        await acceptDialog(t.id);
+      }
       await waitLoad(t.id, args.timeout || 30000);
       const nt = await chrome.tabs.get(t.id);
       return { id: nt.id, url: nt.url, title: nt.title };
@@ -875,8 +946,23 @@ async function init() {
 chrome.runtime.onInstalled.addListener(() => init());
 chrome.runtime.onStartup.addListener(() => init());
 chrome.alarms.create("cxt-poll", { periodInMinutes: 0.5 });
+chrome.alarms.create("cxt-watch", { periodInMinutes: 1 });
+
+async function watchdog() {
+  if (!running) return;
+  if (Date.now() - runningSince < 90000) return;
+  running = false;
+  runningSince = 0;
+  try {
+    const tabs = await chrome.tabs.query({ url: "*://*.facebook.com/*" });
+    for (const t of tabs) await acceptDialog(t.id);
+  } catch (e) {}
+  loop();
+}
+
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "cxt-poll") loop();
+  else if (a.name === "cxt-watch") watchdog();
 });
 const API = {
   test: { path: "/health" },
