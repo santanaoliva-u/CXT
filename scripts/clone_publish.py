@@ -65,10 +65,7 @@ def clear_drafts():
 
 
 def ensure_fresh():
-    want = os.environ.get("CXT_POST_URL")
-    u = cur_url()
-    if not want:
-        want = u if (u and "facebook.com" in u) else "https://www.facebook.com/"
+    want = os.environ.get("CXT_POST_URL") or "https://www.facebook.com/"
     log("navego a %s" % want[:60])
     call("navigate", {"tabId": TAB, "url": want, "timeout": 30000})
     for _ in range(25):

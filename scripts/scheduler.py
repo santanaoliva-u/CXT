@@ -93,7 +93,7 @@ def publish(text):
         env["CXT_TAB"] = tab
     env["CXT_POST_URL"] = os.environ.get("CXT_POST_URL") or "https://www.facebook.com/"
     try:
-        p = subprocess.run(["python3", "-u", PUB, path], capture_output=True, text=True, timeout=300, env=env)
+        p = subprocess.run(["python3", "-u", PUB, path], capture_output=True, text=True, timeout=420, env=env)
         for line in p.stdout.splitlines():
             line = line.strip()
             if line:
