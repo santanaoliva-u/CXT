@@ -37,6 +37,18 @@ type server struct {
 	mu    sync.Mutex
 	wait  map[string]chan resultMsg
 
+	// Only the newest /next poll may take a command; stale polls (torn-down
+	// service workers) would otherwise swallow commands into the void.
+	pollGen uint64
+
+	// Commands handed to a poll but not yet answered, so handleCmd can
+	// re-deliver them if that poll was lost.
+	inflight map[string]cmdMsg
+
+	// Acked by the extension: never re-deliver (repeating an op like a click
+	// on Publicar would duplicate an irreversible action).
+	acked map[string]time.Time
+
 	lastPoll time.Time
 
 	extEnabled bool
@@ -47,8 +59,28 @@ func newServer(token string) *server {
 		token:      token,
 		queue:      make(chan cmdMsg, 64),
 		wait:       map[string]chan resultMsg{},
+		inflight:   map[string]cmdMsg{},
+		acked:      map[string]time.Time{},
 		extEnabled: true,
 	}
+}
+
+func debugf(format string, a ...any) {
+	if os.Getenv("CXT_DEBUG") != "" {
+		log.Printf(format, a...)
+	}
+}
+
+func (s *server) markInflight(c cmdMsg) {
+	s.mu.Lock()
+	s.inflight[c.ID] = c
+	s.mu.Unlock()
+}
+
+func (s *server) clearInflight(id string) {
+	s.mu.Lock()
+	delete(s.inflight, id)
+	s.mu.Unlock()
 }
 
 func (s *server) auth(w http.ResponseWriter, r *http.Request) bool {
@@ -446,10 +478,11 @@ func (s *server) handleStat(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	pending := len(s.wait)
+	inflight := len(s.inflight)
 	last := s.lastPoll
 	s.mu.Unlock()
 	online := !last.IsZero() && time.Since(last) < 30*time.Second
-	writeJSON(w, 200, map[string]any{"queued": len(s.queue), "pending": pending, "extension_online": online, "last_poll_ms": last.UnixMilli()})
+	writeJSON(w, 200, map[string]any{"queued": len(s.queue), "pending": pending, "inflight": inflight, "extension_online": online, "last_poll_ms": last.UnixMilli()})
 }
 
 // ---- extension transport ----
@@ -460,15 +493,41 @@ func (s *server) handleNext(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	s.lastPoll = time.Now()
+	s.pollGen++
+	gen := s.pollGen
 	enabled := s.extEnabled
 	s.mu.Unlock()
 	if !enabled {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	requeue := func(c cmdMsg) bool {
+		select {
+		case s.queue <- c:
+			return true
+		case <-time.After(2 * time.Second):
+			return false
+		}
+	}
 	select {
 	case c := <-s.queue:
-		writeJSON(w, 200, c)
+		s.mu.Lock()
+		newest := s.pollGen
+		s.mu.Unlock()
+		if gen != newest || r.Context().Err() != nil {
+			requeue(c)
+			debugf("stale poll gen=%d newest=%d requeue id=%s op=%s", gen, newest, c.ID, c.Op)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		s.markInflight(c)
+		b, _ := json.Marshal(c)
+		w.Header().Set("Content-Type", "application/json")
+		_, werr := w.Write(b)
+		debugf("deliver id=%s op=%s gen=%d writeErr=%v", c.ID, c.Op, gen, werr)
+	case <-r.Context().Done():
+		debugf("poll closed gen=%d", gen)
+		return
 	case <-time.After(25 * time.Second):
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -488,7 +547,10 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 	if ch != nil {
 		delete(s.wait, rm.ID)
 	}
+	delete(s.inflight, rm.ID)
+	delete(s.acked, rm.ID)
 	s.mu.Unlock()
+	debugf("result id=%s ok=%v err=%s", rm.ID, rm.OK, rm.Error)
 	if ch != nil {
 		ch <- rm
 	}
@@ -534,12 +596,57 @@ func (s *server) handleCmd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	select {
-	case rm := <-ch:
-		writeJSON(w, 200, rm)
-	case <-time.After(120 * time.Second):
-		writeJSON(w, 200, resultMsg{ID: cm.ID, OK: false, Error: "timeout: la extension no respondio"})
+	deadline := time.Now().Add(150 * time.Second)
+	redeliverAt := time.Now().Add(12 * time.Second)
+	attempts := 0
+	for {
+		select {
+		case rm := <-ch:
+			writeJSON(w, 200, rm)
+			return
+		case <-time.After(400 * time.Millisecond):
+		}
+		now := time.Now()
+		s.mu.Lock()
+		_, isAck := s.acked[cm.ID]
+		s.mu.Unlock()
+		if !isAck && now.After(redeliverAt) {
+			if attempts >= 2 || now.After(deadline) {
+				writeJSON(w, 200, resultMsg{ID: cm.ID, OK: false, Error: "timeout: la extension no respondio"})
+				return
+			}
+			attempts++
+			s.clearInflight(cm.ID)
+			select {
+			case s.queue <- cm:
+				debugf("redeliver id=%s attempt=%d", cm.ID, attempts)
+			case <-time.After(2 * time.Second):
+			}
+			redeliverAt = time.Now().Add(12 * time.Second)
+		}
+		if now.After(deadline) {
+			writeJSON(w, 200, resultMsg{ID: cm.ID, OK: false, Error: "timeout: la extension no respondio"})
+			return
+		}
 	}
+}
+
+func (s *server) handleAck(w http.ResponseWriter, r *http.Request) {
+	if !s.auth(w, r) {
+		return
+	}
+	var am struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&am); err != nil || am.ID == "" {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	s.acked[am.ID] = time.Now()
+	s.mu.Unlock()
+	debugf("ack id=%s", am.ID)
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
 func cors(h http.Handler) http.Handler {
@@ -667,6 +774,7 @@ func main() {
 	mux.HandleFunc("/log", s.handleLog)
 	mux.HandleFunc("/stat", s.handleStat)
 	mux.HandleFunc("/next", s.handleNext)
+	mux.HandleFunc("/ack", s.handleAck)
 	mux.HandleFunc("/result", s.handleResult)
 	mux.HandleFunc("/cmd", s.handleCmd)
 

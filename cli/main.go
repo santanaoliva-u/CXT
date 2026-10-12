@@ -120,7 +120,7 @@ func main() {
 		"op":   json.RawMessage(strconvQuote(op)),
 		"args": json.RawMessage(raw),
 	})
-	client := &http.Client{Timeout: 70 * time.Second}
+	client := &http.Client{Timeout: 140 * time.Second}
 	resp, err := client.Post(endpoint, "application/json", bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error de conexion con cxtd: %v\n", err)

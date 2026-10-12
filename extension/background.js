@@ -3,6 +3,7 @@ const DEFAULTS = { server: "http://127.0.0.1:8799", token: "", enabled: true, ma
 let running = false;
 let runningSince = 0;
 let lastStore = 0;
+let pollCtl = null;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -40,6 +41,16 @@ function hookDialogs() {
 const pageEnabled = new Set();
 
 const OP_TIMEOUT_MS = 25000;
+
+function opTimeout(op, args) {
+  const explicit = Number((args && args.timeoutMs) || 0);
+  if (explicit > 0) return explicit;
+  if (op === "navigate" || op === "back" || op === "forward" || op === "reload") {
+    const t = Number((args && args.timeout) || 0);
+    return t > 0 ? t + 15000 : 60000;
+  }
+  return OP_TIMEOUT_MS;
+}
 
 function withTimeout(p, ms, tag) {
   return new Promise((resolve, reject) => {
@@ -142,7 +153,18 @@ async function loop() {
   if (running) return;
   running = true;
   runningSince = Date.now();
+  if (pollCtl) {
+    try {
+      pollCtl.abort();
+    } catch (e) {}
+  }
+  pollCtl = new AbortController();
+  const ctl = pollCtl;
   while (true) {
+    if (ctl.signal.aborted) {
+      running = false;
+      return;
+    }
     const c = await cfg();
     if (!c.enabled) {
       await reportState(c);
@@ -151,13 +173,18 @@ async function loop() {
     }
     let cmd = null;
     try {
-      const res = await fetch(qs(c.server, c.token), { cache: "no-store" });
+      const res = await fetch(qs(c.server, c.token), { cache: "no-store", signal: ctl.signal });
       if (res.status === 204) continue;
       if (!res.ok) {
         await sleep(1000);
         continue;
       }
       cmd = await res.json();
+      if (cmd && cmd.id) {
+        try {
+          await post(c.server, "/ack", c.token, { id: cmd.id });
+        } catch (e) {}
+      }
     } catch (e) {
       await sleep(1000);
       continue;
@@ -167,7 +194,7 @@ async function loop() {
       out = {
         id: cmd.id,
         ok: true,
-        data: await withTimeout(exec(cmd.op, cmd.args || {}), OP_TIMEOUT_MS, cmd.op),
+        data: await withTimeout(exec(cmd.op, cmd.args || {}), opTimeout(cmd.op, cmd.args), cmd.op),
       };
     } catch (e) {
       out = { id: cmd.id, ok: false, error: String(e && e.message ? e.message : e) };

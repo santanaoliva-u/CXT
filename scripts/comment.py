@@ -221,15 +221,16 @@ def _norm(s):
 
 
 def gen_auto():
+    city = os.environ.get("CXT_CITY", "tu ciudad")
     try:
-        out = subprocess.run([NEWS, "Playa del Carmen", "6"], capture_output=True, text=True, timeout=60).stdout
+        out = subprocess.run([NEWS, city, "6"], capture_output=True, text=True, timeout=60).stdout
         for line in out.splitlines():
             t = line.strip().split(" - ")[0].strip()
             if t:
                 return random.choice([
-                    "Muy de acuerdo con esto de Playa del Carmen 🌴",
-                    "Buen dato para Playa del Carmen, gracias por compartir. 👏",
-                    "Esto nos toca a todos en Playa del Carmen. 🌴",
+                    "Muy de acuerdo con esto de " + city + " 🌴",
+                    "Buen dato, gracias por compartir. 👏",
+                    "Esto nos toca a todos en " + city + ". 🌴",
                 ])
     except Exception:
         pass

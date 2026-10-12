@@ -13,14 +13,42 @@ CXT = os.path.join(DIR, "bin", "cxt")
 PUB = os.path.join(DIR, "clone_publish.py")
 NEWS = os.path.join(DIR, "news.sh")
 
+CITY = os.environ.get("CXT_CITY", "tu ciudad")
+TAGS = os.environ.get("CXT_TAGS", "#Noticias")
+
 TEMPLATES = [
-    "Buenos días, Playa del Carmen. {t}",
-    "Ojo, Playa del Carmen: {t}",
+    "Buenos días, {c}. {t}",
+    "Ojo, {c}: {t}",
     "{t} — ¿Qué opinan? 🌴",
-    "Esto está pasando en Playa del Carmen: {t}",
-    "{t}\n\nBuenas noticias para Playa del Carmen. 🌴",
+    "Esto está pasando en {c}: {t}",
+    "{t}\n\nBuenas noticias para {c}. 🌴",
 ]
-HASHTAGS = "#PlayaDelCarmen #RivieraMaya #QuintanaRoo"
+HASHTAGS = TAGS
+
+NEGATIVE = ("accidente", "lesionad", "muert", "fallec", "asesin", "crimen", "detenid", "balac", "herid",
+            "ejecut", "narco", "robo", "asalt", "desaparec", "feminicid", "violencia", "balead",
+            "sangre", "cadaver", "arma", "homicid", "suicid", "droga", "secuestr", "atropell",
+            "incendio", "tragedia", "deceso", "cuerpo", "extorsion", "peligro", "alerta", "protesta",
+            "bloqueo", "huelga", "cierre", "crisis", "deuda", "desalojo", "clausur", "multa", "denuncia")
+POSITIVE = ("inaugur", "nuevo", "mejora", "abre", "logro", "apoyo", "benefi", "cultura", "deport", "turism",
+            "inversio", "empleo", "obra", "festival", "evento", "programa", "beca", "arranca", "celebra",
+            "impulsa", "crece", "moderniza", "amplia", "refuerza", "suma", "gana", "exito", "record",
+            "gratis", "familia", "joven", "limpia", "rehabilita", "rescata", "capacita")
+
+
+def _norm(s):
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", s.lower()) if unicodedata.category(c) != "Mn")
+
+
+def _negative(s):
+    n = _norm(s)
+    return any(k in n for k in NEGATIVE)
+
+
+def _positive(s):
+    n = _norm(s)
+    return any(k in n for k in POSITIVE)
 
 
 def log(msg):
@@ -71,16 +99,21 @@ def gen_auto():
             pass
     out = ""
     try:
-        out = subprocess.run([NEWS, "Playa del Carmen", "8"], capture_output=True, text=True, timeout=60).stdout
+        out = subprocess.run([NEWS, CITY, "8"], capture_output=True, text=True, timeout=60).stdout
     except Exception as e:
         log("news err " + str(e))
+    cand = []
     for title in [l.strip() for l in out.splitlines() if l.strip()]:
         t = title.split(" - ")[0].strip()
-        if t and t not in used:
-            used.append(t)
-            write_json(USED, used[-500:])
-            return random.choice(TEMPLATES).format(t=t) + "\n\n" + HASHTAGS
-    return "Buenos días, Playa del Carmen. 🌴 " + HASHTAGS
+        if t and t not in used and not _negative(t):
+            cand.append(t)
+    cand.sort(key=lambda t: 0 if _positive(t) else 1)
+    if cand:
+        t = cand[0]
+        used.append(t)
+        write_json(USED, used[-500:])
+        return random.choice(TEMPLATES).format(t=t, c=CITY) + "\n\n" + HASHTAGS
+    return "Buenos días, " + CITY + ". 🌴 " + HASHTAGS
 
 
 def publish(text):
