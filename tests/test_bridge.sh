@@ -1,21 +1,34 @@
 #!/usr/bin/env bash
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
 PORT="${CXT_TEST_PORT:-8798}"
 TOK=tt
 export CXT_PORT="$PORT" CXT_TOKEN="$TOK"
 
-"$HERE/bin/cxtd" >/tmp/cxt_test_daemon.log 2>&1 &
-DPID=$!
+# Aislado del stack real: CXT_DIR temporal y sin scheduler, para no tocar ~/.cxt
+# ni el daemon vivo del usuario (8799). El puerto de test es distinto (8798).
+export CXT_DIR="$(mktemp -d)"
+export CXT_NO_SCHED=1
+DPID=""
 MPID=""
-trap 'kill ${DPID:-} ${MPID:-} 2>/dev/null' EXIT
+trap 'kill ${DPID:-} ${MPID:-} 2>/dev/null; rm -rf "$CXT_DIR"' EXIT
+
+# Los binarios viven en la raiz del repo, no bajo tests/. Constrúyelos si faltan.
+if [ ! -x "$ROOT/bin/cxtd" ] || [ ! -x "$ROOT/bin/cxt" ]; then
+  ( cd "$ROOT" && go build -o bin/cxtd ./server && go build -o bin/cxt ./cli ) || {
+    echo "FAIL: no pude construir bin/cxtd y bin/cxt"; exit 1; }
+fi
+
+"$ROOT/bin/cxtd" >/tmp/cxt_test_daemon.log 2>&1 &
+DPID=$!
 sleep 0.6
 
 CXT_SERVER="http://127.0.0.1:$PORT" CXT_TOKEN="$TOK" node "$HERE/mock_ext.mjs" &
 MPID=$!
 sleep 0.6
 
-run() { CXT_SERVER="http://127.0.0.1:$PORT" CXT_TOKEN="$TOK" "$HERE/bin/cxt" "$@"; }
+run() { CXT_SERVER="http://127.0.0.1:$PORT" CXT_TOKEN="$TOK" "$ROOT/bin/cxt" "$@"; }
 FAIL=0
 chk() { if [ "$1" = 0 ]; then echo "PASS: $2"; else echo "FAIL: $2"; FAIL=1; fi; }
 

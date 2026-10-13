@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, random, subprocess, time
+import json, os, random, re, subprocess, time
 
 import cxtlib
 
@@ -13,16 +13,30 @@ CXT = os.path.join(DIR, "bin", "cxt")
 PUB = os.path.join(DIR, "clone_publish.py")
 NEWS = os.path.join(DIR, "news.sh")
 
-CITY = os.environ.get("CXT_CITY", "tu ciudad")
-TAGS = os.environ.get("CXT_TAGS", "#Noticias")
+CITY = os.environ.get("CXT_CITY", "Playa del Carmen")
+TAGS = os.environ.get("CXT_TAGS", "#PlayaDelCarmen #RivieraMaya #QuintanaRoo")
 
-TEMPLATES = [
-    "Buenos días, {c}. {t}",
-    "Ojo, {c}: {t}",
-    "{t} — ¿Qué opinan? 🌴",
-    "Esto está pasando en {c}: {t}",
-    "{t}\n\nBuenas noticias para {c}. 🌴",
+HOOKS_CITY = [
+    "Esto me llamó la atención de " + CITY + ":",
+    "Andaba leyendo las noticias de " + CITY + " y me encontré esto:",
+    "Buena noticia para " + CITY + ":",
+    "Ojo con esto, " + CITY + ":",
 ]
+HOOKS_PLAIN = [
+    "Esto me llamó la atención:",
+    "Andaba leyendo las noticias y me encontré esto:",
+    "Buena noticia:",
+    "Me topé con esto:",
+]
+CLOSERS = [
+    "Ojalá se haga bien.",
+    "Me gusta ver que la ciudad avanza.",
+    "Ojalá de verdad le sirva a la gente de aquí.",
+    "Ojalá se sostenga en el tiempo.",
+    "Está bien, siempre que beneficie a los de acá.",
+    "Un pasito más para Playa.",
+]
+EMOJIS = ["🌴", "🌊", "🙌", "👏", "☀️", ""]
 HASHTAGS = TAGS
 
 NEGATIVE = ("accidente", "lesionad", "muert", "fallec", "asesin", "crimen", "detenid", "balac", "herid",
@@ -49,6 +63,64 @@ def _negative(s):
 def _positive(s):
     n = _norm(s)
     return any(k in n for k in POSITIVE)
+
+
+# palabra clave en el titular -> hashtag relevante (0-3, nunca el bloque fijo).
+_TAGMAP = [
+    ("turism", "#Turismo"), ("viaj", "#Turismo"), ("hotel", "#Turismo"), ("crucer", "#Turismo"),
+    ("emple", "#Empleo"), ("vacante", "#Empleo"), ("trabaj", "#Empleo"),
+    ("cultur", "#Cultura"), ("hanal", "#Cultura"), ("festival", "#Cultura"), ("musica", "#Cultura"),
+    ("deport", "#Deporte"), ("alberca", "#Deporte"), ("futbol", "#Deporte"),
+    ("conserva", "#MedioAmbiente"), ("tiburon", "#MedioAmbiente"), ("sargazo", "#MedioAmbiente"),
+    ("ambient", "#MedioAmbiente"),
+    ("seguridad", "#Seguridad"), ("policia", "#Seguridad"),
+    ("tren", "#TrenMaya"), ("maya", "#TrenMaya"),
+    ("emprend", "#Emprendedores"), ("negocio", "#Negocios"), ("pyme", "#Negocios"),
+    ("obra", "#Obras"), ("parque", "#Espacios"), ("calle", "#Obras"), ("paviment", "#Obras"),
+    ("salud", "#Salud"), ("hospital", "#Salud"),
+    ("educa", "#Educación"), ("beca", "#Educación"), ("escuela", "#Educación"),
+    ("econom", "#Economía"), ("invers", "#Inversión"),
+]
+
+
+def _clean(t):
+    t = (t or "").replace("''", '"').replace("´´", '"').replace("“", '"').replace("”", '"')
+    t = re.sub(r"\s+", " ", t).strip()
+    return t.rstrip(" .;,")
+
+
+def _has_city(t):
+    return CITY.lower() in _norm(t)
+
+
+def _tags(t):
+    tags = ["#PlayaDelCarmen"]
+    n = _norm(t)
+    for key, tag in _TAGMAP:
+        if key in n and tag not in tags:
+            tags.append(tag)
+        if len(tags) >= 3:
+            break
+    if len(tags) == 1:
+        tags.append("#RivieraMaya")
+    return " ".join(tags[:3])
+
+
+def _humanize(title, city_already):
+    head = _clean(title)
+    if not head:
+        return ""
+    if head[0].islower():
+        head = head[0].upper() + head[1:]
+    intro = random.choice(HOOKS_PLAIN if city_already else HOOKS_CITY)
+    body = intro + " " + head
+    if not body.endswith("."):
+        body += "."
+    body += " " + random.choice(CLOSERS)
+    emoji = random.choice(EMOJIS)
+    if emoji:
+        body += " " + emoji
+    return body + "\n\n" + _tags(title)
 
 
 def log(msg):
@@ -112,8 +184,8 @@ def gen_auto():
         t = cand[0]
         used.append(t)
         write_json(USED, used[-500:])
-        return random.choice(TEMPLATES).format(t=t, c=CITY) + "\n\n" + HASHTAGS
-    return "Buenos días, " + CITY + ". 🌴 " + HASHTAGS
+        return _humanize(t, _has_city(t))
+    return "Buenos días, " + CITY + " 🌴 Ojalá sea un gran día para todos por acá.\n\n" + HASHTAGS
 
 
 def publish(text):

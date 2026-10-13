@@ -4,6 +4,17 @@ let running = false;
 let runningSince = 0;
 let lastStore = 0;
 let pollCtl = null;
+let currentLoop = null;
+
+const processedIds = new Set();
+const PROCESSED_MAX = 100;
+function markProcessed(id) {
+  if (id == null) return;
+  processedIds.add(id);
+  while (processedIds.size > PROCESSED_MAX) {
+    processedIds.delete(processedIds.values().next().value);
+  }
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -153,6 +164,8 @@ async function loop() {
   if (running) return;
   running = true;
   runningSince = Date.now();
+  const myLoop = {};
+  currentLoop = myLoop;
   if (pollCtl) {
     try {
       pollCtl.abort();
@@ -160,55 +173,75 @@ async function loop() {
   }
   pollCtl = new AbortController();
   const ctl = pollCtl;
-  while (true) {
-    if (ctl.signal.aborted) {
-      running = false;
-      return;
-    }
-    const c = await cfg();
-    if (!c.enabled) {
-      await reportState(c);
-      running = false;
-      return;
-    }
-    let cmd = null;
-    try {
-      const res = await fetch(qs(c.server, c.token), { cache: "no-store", signal: ctl.signal });
-      if (res.status === 204) continue;
-      if (!res.ok) {
+  try {
+    while (true) {
+      if (currentLoop !== myLoop) return;
+      if (ctl.signal.aborted) return;
+      let c;
+      try {
+        c = await cfg();
+      } catch (e) {
         await sleep(1000);
         continue;
       }
-      cmd = await res.json();
-      if (cmd && cmd.id) {
+      if (!c.enabled) {
+        await reportState(c);
+        return;
+      }
+      let cmd = null;
+      try {
+        const res = await fetch(qs(c.server, c.token), { cache: "no-store", signal: ctl.signal });
+        if (res.status === 204) continue;
+        if (!res.ok) {
+          await sleep(1000);
+          continue;
+        }
+        cmd = await res.json();
+        if (cmd && cmd.id) {
+          try {
+            await post(c.server, "/ack", c.token, { id: cmd.id });
+          } catch (e) {}
+        }
+      } catch (e) {
+        await sleep(1000);
+        continue;
+      }
+      if (!cmd || !cmd.id) continue;
+      if (processedIds.has(cmd.id)) {
         try {
-          await post(c.server, "/ack", c.token, { id: cmd.id });
+          await post(c.server, "/result", c.token, { id: cmd.id, ok: false, error: "duplicado ignorado" });
+        } catch (e) {}
+        continue;
+      }
+      markProcessed(cmd.id);
+      let out;
+      try {
+        out = {
+          id: cmd.id,
+          ok: true,
+          data: await withTimeout(exec(cmd.op, cmd.args || {}), opTimeout(cmd.op, cmd.args), cmd.op),
+        };
+      } catch (e) {
+        out = { id: cmd.id, ok: false, error: String(e && e.message ? e.message : e) };
+        if (e && e.timeout) await acceptDialog(cmd.args && cmd.args.tabId);
+      }
+      if (Date.now() - lastStore > 1500) {
+        lastStore = Date.now();
+        try {
+          await chrome.storage.local.set({
+            last: { op: cmd.op, ok: out.ok, error: out.error || "", at: Date.now() },
+          });
         } catch (e) {}
       }
-    } catch (e) {
-      await sleep(1000);
-      continue;
+      try {
+        await post(c.server, "/result", c.token, out);
+      } catch (e) {}
     }
-    let out;
-    try {
-      out = {
-        id: cmd.id,
-        ok: true,
-        data: await withTimeout(exec(cmd.op, cmd.args || {}), opTimeout(cmd.op, cmd.args), cmd.op),
-      };
-    } catch (e) {
-      out = { id: cmd.id, ok: false, error: String(e && e.message ? e.message : e) };
-      if (e && e.timeout) await acceptDialog(cmd.args && cmd.args.tabId);
+  } finally {
+    if (currentLoop === myLoop) {
+      running = false;
+      runningSince = 0;
     }
-    if (Date.now() - lastStore > 1500) {
-      lastStore = Date.now();
-      await chrome.storage.local.set({
-        last: { op: cmd.op, ok: out.ok, error: out.error || "", at: Date.now() },
-      });
-    }
-    try {
-      await post(c.server, "/result", c.token, out);
-    } catch (e) {}
   }
 }
 
@@ -267,6 +300,7 @@ async function exec(op, args) {
       return { id: nt.id, url: nt.url, title: nt.title };
     }
     case "tab.activate": {
+      if (args.tabId == null) return { ok: false, error: "tab.activate: falta tabId" };
       let t;
       try {
         t = await withTimeout(chrome.tabs.update(args.tabId, { active: true }), 8000, "tab.activate");
@@ -282,13 +316,15 @@ async function exec(op, args) {
       return { id: t.id, url: t.url };
     }
     case "tab.close":
+      if (args.tabId == null) return { ok: false, error: "tab.close: falta tabId" };
       await chrome.tabs.remove(args.tabId);
       return { closed: args.tabId };
     case "navigate": {
+      if (!args.url) return { ok: false, error: "navigate: falta url" };
       const t = await resolveTab(args);
       await armDialog(t.id);
-      const nav = chrome.tabs.update(t.id, { url: args.url });
-      const committed = await Promise.race([nav.then(() => true), sleep(6000).then(() => false)]);
+      const nav = chrome.tabs.update(t.id, { url: args.url }).then(() => true, () => false);
+      const committed = await Promise.race([nav, sleep(6000).then(() => false)]);
       if (!committed) {
         try {
           await cdp(t.id, "Page.navigate", { url: args.url });
@@ -321,16 +357,22 @@ async function exec(op, args) {
       await sleep(args.ms || 500);
       return { waited: args.ms || 500 };
     case "screenshot": {
+      if (args == null || typeof args !== "object") return { ok: false, error: "screenshot: args invalidos" };
+      if (args.format && args.format !== "png" && args.format !== "jpeg") return { ok: false, error: "screenshot: formato invalido" };
       const t = await resolveTab(args);
       await chrome.tabs.update(t.id, { active: true });
       if (t.windowId != null) await chrome.windows.update(t.windowId, { focused: true });
       await sleep(150);
+      if (t.windowId == null) return { ok: false, error: "screenshot: sin windowId" };
       const dataUrl = await chrome.tabs.captureVisibleTab(t.windowId, { format: args.format || "png" });
       return { dataUrl };
     }
-    case "cdp":
+    case "cdp": {
+      if (!args || typeof args.method !== "string" || !args.method) return { ok: false, error: "cdp: falta method" };
       return { result: await cdp((await resolveTab(args)).id, args.method, args.params) };
+    }
     case "cdpclick": {
+      if (!args || !Number.isFinite(Number(args.x)) || !Number.isFinite(Number(args.y))) return { ok: false, error: "cdpclick: faltan x e y numericos" };
       const t = await resolveTab(args);
       const x = args.x;
       const y = args.y;
@@ -377,6 +419,7 @@ async function exec(op, args) {
       return { clicked: true, x, y, tag: p.tag, text: p.text, match_level: p.match || null, click_method: "cdp" };
     }
     case "cdpclickref": {
+      if (!args || args.ref == null || args.ref === "") return { ok: false, error: "cdpclickref: falta ref" };
       const t = await resolveTab(args);
       const [r] = await chrome.scripting.executeScript({
         target: { tabId: t.id },
@@ -484,6 +527,8 @@ async function exec(op, args) {
       return { ok, steps: results.length, results };
     }
     default: {
+      if (typeof op !== "string" || !op) return { ok: false, error: "op invalida" };
+      if (args == null || typeof args !== "object") return { ok: false, error: "args invalidos para " + op };
       const t = await resolveTab(args);
       const [r] = await chrome.scripting.executeScript({
         target: { tabId: t.id },
@@ -955,23 +1000,23 @@ async function reportState(c) {
   } catch (e) {}
 }
 
-function applyBadge(on) {
+async function applyBadge(on) {
   try {
-    chrome.action.setBadgeText({ text: on ? "ON" : "OFF" });
-    chrome.action.setBadgeBackgroundColor({ color: on ? "#2ecc71" : "#e74c3c" });
-    chrome.action.setTitle({ title: on ? "CXT — ACTIVADA" : "CXT — DESACTIVADA" });
+    await chrome.action.setBadgeText({ text: on ? "ON" : "OFF" });
+    await chrome.action.setBadgeBackgroundColor({ color: on ? "#2ecc71" : "#e74c3c" });
+    await chrome.action.setTitle({ title: on ? "CXT — ACTIVADA" : "CXT — DESACTIVADA" });
   } catch (e) {}
 }
 
 async function init() {
   const c = await cfg();
-  applyBadge(c.enabled);
+  await applyBadge(c.enabled);
   await reportState(c);
   if (c.enabled) loop();
 }
 
-chrome.runtime.onInstalled.addListener(() => init());
-chrome.runtime.onStartup.addListener(() => init());
+chrome.runtime.onInstalled.addListener(() => init().catch(console.error));
+chrome.runtime.onStartup.addListener(() => init().catch(console.error));
 chrome.alarms.create("cxt-poll", { periodInMinutes: 0.5 });
 chrome.alarms.create("cxt-watch", { periodInMinutes: 1 });
 
@@ -984,12 +1029,15 @@ async function watchdog() {
     const tabs = await chrome.tabs.query({ url: "*://*.facebook.com/*" });
     for (const t of tabs) await acceptDialog(t.id);
   } catch (e) {}
+  try {
+    if (pollCtl) pollCtl.abort();
+  } catch (e) {}
   loop();
 }
 
 chrome.alarms.onAlarm.addListener((a) => {
-  if (a.name === "cxt-poll") loop();
-  else if (a.name === "cxt-watch") watchdog();
+  if (a.name === "cxt-poll") loop().catch(() => {});
+  else if (a.name === "cxt-watch") watchdog().catch(() => {});
 });
 const API = {
   test: { path: "/health" },
@@ -1021,9 +1069,24 @@ chrome.runtime.onMessage.addListener((msg, _s, send) => {
   if (msg.type === "setEnabled") {
     (async () => {
       try {
-        await chrome.storage.local.set({ enabled: !!msg.value });
+        const on = !!msg.value;
+        await chrome.storage.local.set({ enabled: on });
+        if (!on) {
+          if (pollCtl) {
+            try {
+              pollCtl.abort();
+            } catch (e) {}
+          }
+          try {
+            await chrome.alarms.clear("cxt-poll");
+          } catch (e) {}
+        } else {
+          try {
+            chrome.alarms.create("cxt-poll", { periodInMinutes: 0.5 });
+          } catch (e) {}
+        }
         const c = await cfg();
-        applyBadge(c.enabled);
+        await applyBadge(c.enabled);
         await reportState(c);
         if (c.enabled) loop();
         send({ ok: true, enabled: c.enabled });
@@ -1053,4 +1116,4 @@ chrome.runtime.onMessage.addListener((msg, _s, send) => {
   })();
   return true;
 });
-init();
+init().catch(console.error);

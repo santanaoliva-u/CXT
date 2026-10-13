@@ -16,14 +16,14 @@ STUB
 chmod +x "$TMP/.cxt/bin/cxt"
 
 cp "$HERE/../scripts/clone_publish.py" "$TMP/.cxt/clone_publish.py"
-[ -f "$HERE/../scripts/news.sh" ] && cp "$HERE/news.sh" "$TMP/.cxt/news.sh"
+[ -f "$HERE/../scripts/news.sh" ] && cp "$HERE/../scripts/news.sh" "$TMP/.cxt/news.sh"
 
 cat > "$TMP/.cxt/schedule.json" <<'J'
 {"enabled":true,"interval_min":0.02,"count":1,"remaining":1,"topic":"test fijo","next_at":0,"started_at":0,"last":null,"sched_alive":0}
 J
 
 export CXT_BIN="$TMP/.cxt/bin/cxt"
-HOME="$TMP" python3 "$HERE/scheduler.py" >"$TMP/sched.log" 2>&1 &
+HOME="$TMP" python3 "$HERE/../scripts/scheduler.py" >"$TMP/sched.log" 2>&1 &
 SPID=$!
 for i in $(seq 1 90); do
   grep -q '"last": *{' "$TMP/.cxt/schedule.json" 2>/dev/null && break

@@ -21,34 +21,14 @@ import subprocess
 import sys
 import time
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-CXT = os.environ.get("CXT_BIN") or os.path.join(HERE, "bin", "cxt")
-TAB = int(os.environ["CXT_TAB"]) if os.environ.get("CXT_TAB") else None
-HOME_DIR = os.path.expanduser("~")
-STATUS = os.path.join(HOME_DIR, ".cxt", "comment_status.json")
-COMMENTED = os.path.join(HOME_DIR, ".cxt", "commented.json")
-NEWS = os.path.join(HERE, "news.sh")
+import cxtlib
 
-
-def call(op, args, timeout=120):
-    p = subprocess.run([CXT, op, json.dumps(args)], capture_output=True, text=True, timeout=timeout)
-    try:
-        return json.loads(p.stdout.strip())
-    except Exception:
-        return {"raw": (p.stdout or "")[:300], "err": (p.stderr or "")[:200]}
-
-
-def cdp(expr, timeout=90):
-    r = call("cdp", {"tabId": TAB, "method": "Runtime.evaluate",
-                     "params": {"expression": expr, "returnByValue": True, "awaitPromise": True}}, timeout)
-    try:
-        return r["result"]["result"].get("value")
-    except Exception:
-        return None
-
-
-def click(x, y):
-    return call("cdpclick", {"tabId": TAB, "x": int(x), "y": int(y)})
+CXT = cxtlib.resolve_cxt()
+TAB = cxtlib.resolve_tab(CXT)
+STATUS = os.path.join(cxtlib.resolve_dir(), "comment_status.json")
+COMMENTED = os.path.join(cxtlib.resolve_dir(), "commented.json")
+NEWS = cxtlib.resolve_script("news.sh")
+call = cxtlib.caller(CXT)
 
 
 def sleep(ms):

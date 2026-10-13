@@ -83,6 +83,13 @@ func (s *server) clearInflight(id string) {
 	s.mu.Unlock()
 }
 
+func (s *server) forget(id string) {
+	s.mu.Lock()
+	delete(s.inflight, id)
+	delete(s.acked, id)
+	s.mu.Unlock()
+}
+
 func (s *server) auth(w http.ResponseWriter, r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin != "" && !strings.HasPrefix(origin, "chrome-extension://") && !strings.HasPrefix(origin, "moz-extension://") {
@@ -156,7 +163,31 @@ func (s *server) handleState(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.extEnabled = st.Enabled
 	s.lastPoll = time.Now()
+	var drained []chan resultMsg
+	var drainedIDs []string
+	if !st.Enabled {
+		// Kill switch: nada de lo encolado antes de desactivar debe entregarse
+		// ni reentregarse. Fallamos a los que esperan un resultado y vaciamos la
+		// cola y los mapas de seguimiento.
+		for id, ch := range s.wait {
+			delete(s.wait, id)
+			drained = append(drained, ch)
+			drainedIDs = append(drainedIDs, id)
+		}
+		for draining := true; draining; {
+			select {
+			case <-s.queue:
+			default:
+				draining = false
+			}
+		}
+		s.inflight = map[string]cmdMsg{}
+		s.acked = map[string]time.Time{}
+	}
 	s.mu.Unlock()
+	for i, ch := range drained {
+		ch <- resultMsg{ID: drainedIDs[i], OK: false, Error: "kill switch activado"}
+	}
 	writeJSON(w, 200, map[string]bool{"ok": true, "enabled": st.Enabled})
 }
 
@@ -257,15 +288,17 @@ func readPid(path string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(string(b)))
 }
 
-func stopJob(pidFile string) {
-	if pid, err := readPid(filepath.Join(cxtDir(), pidFile)); err == nil {
-		_ = syscall.Kill(pid, syscall.SIGTERM)
+func stopJob(pidFile, marker string) {
+	if procRunning(pidFile, marker) {
+		if pid, err := readPid(filepath.Join(cxtDir(), pidFile)); err == nil {
+			_ = syscall.Kill(pid, syscall.SIGTERM)
+		}
 	}
 	_ = os.Remove(filepath.Join(cxtDir(), pidFile))
 }
 
 // startDetached lanza `setsid python3 <script> [args...]` con la salida al log
-// indicado y devuelve el pid. El daemon no espera al hijo (lo reapea el SO).
+// indicado y devuelve el pid. Un goroutine reapea al hijo para que no quede zombie.
 func startDetached(script, logPath string, args ...string) (int, error) {
 	argv := append([]string{"python3", "-u", script}, args...)
 	cmd := exec.Command("setsid", argv...)
@@ -280,6 +313,7 @@ func startDetached(script, logPath string, args ...string) (int, error) {
 		}
 		return 0, err
 	}
+	go func() { _ = cmd.Wait() }()
 	if logf != nil {
 		_ = logf.Close()
 	}
@@ -322,7 +356,7 @@ func (j jobSpec) set(w http.ResponseWriter, r *http.Request) {
 		st = map[string]any{}
 	}
 	if b, ok := st["stop"].(bool); ok && b {
-		stopJob(j.pid)
+		stopJob(j.pid, j.script)
 		writeJSON(w, 200, map[string]any{"ok": true, "stopped": true})
 		return
 	}
@@ -480,9 +514,10 @@ func (s *server) handleStat(w http.ResponseWriter, r *http.Request) {
 	pending := len(s.wait)
 	inflight := len(s.inflight)
 	last := s.lastPoll
+	enabled := s.extEnabled
 	s.mu.Unlock()
 	online := !last.IsZero() && time.Since(last) < 30*time.Second
-	writeJSON(w, 200, map[string]any{"queued": len(s.queue), "pending": pending, "inflight": inflight, "extension_online": online, "last_poll_ms": last.UnixMilli()})
+	writeJSON(w, 200, map[string]any{"queued": len(s.queue), "pending": pending, "inflight": inflight, "extension_online": online, "last_poll_ms": last.UnixMilli(), "enabled": enabled})
 }
 
 // ---- extension transport ----
@@ -513,10 +548,11 @@ func (s *server) handleNext(w http.ResponseWriter, r *http.Request) {
 	case c := <-s.queue:
 		s.mu.Lock()
 		newest := s.pollGen
+		stillEnabled := s.extEnabled
 		s.mu.Unlock()
-		if gen != newest || r.Context().Err() != nil {
+		if gen != newest || r.Context().Err() != nil || !stillEnabled {
 			requeue(c)
-			debugf("stale poll gen=%d newest=%d requeue id=%s op=%s", gen, newest, c.ID, c.Op)
+			debugf("stale/disabled poll gen=%d newest=%d enabled=%v requeue id=%s op=%s", gen, newest, stillEnabled, c.ID, c.Op)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -596,9 +632,14 @@ func (s *server) handleCmd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// El CLI se rinde a los 140s (http.Client.Timeout en cli/main.go) y el
+	// daemon a los 150s: el daemon espera 10s mas para no declarar timeout de
+	// un comando que el CLI aun aguarda; el error final lo da el CLI y aqui
+	// solo se drena el estado, sin carreras.
 	deadline := time.Now().Add(150 * time.Second)
-	redeliverAt := time.Now().Add(12 * time.Second)
 	attempts := 0
+	sawInflight := false
+	redeliverAt := time.Time{}
 	for {
 		select {
 		case rm := <-ch:
@@ -609,9 +650,21 @@ func (s *server) handleCmd(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
 		s.mu.Lock()
 		_, isAck := s.acked[cm.ID]
+		_, inFlight := s.inflight[cm.ID]
 		s.mu.Unlock()
-		if !isAck && now.After(redeliverAt) {
+		// Re-entrega SOLO si un poll tomo el comando de verdad (sigue en
+		// inflight) y no fue ack. Si nunca se entrego su unica copia sigue en
+		// s.queue: reencolarlo aqui la duplicaria (bug reproducido). La ventana
+		// de 12s arranca al avistarlo en inflight, no al crearlo.
+		if isAck || !inFlight {
+			sawInflight = false
+		} else if !sawInflight {
+			sawInflight = true
+			redeliverAt = now.Add(12 * time.Second)
+		}
+		if sawInflight && now.After(redeliverAt) {
 			if attempts >= 2 || now.After(deadline) {
+				s.forget(cm.ID)
 				writeJSON(w, 200, resultMsg{ID: cm.ID, OK: false, Error: "timeout: la extension no respondio"})
 				return
 			}
@@ -622,9 +675,10 @@ func (s *server) handleCmd(w http.ResponseWriter, r *http.Request) {
 				debugf("redeliver id=%s attempt=%d", cm.ID, attempts)
 			case <-time.After(2 * time.Second):
 			}
-			redeliverAt = time.Now().Add(12 * time.Second)
+			sawInflight = false
 		}
 		if now.After(deadline) {
+			s.forget(cm.ID)
 			writeJSON(w, 200, resultMsg{ID: cm.ID, OK: false, Error: "timeout: la extension no respondio"})
 			return
 		}

@@ -136,7 +136,7 @@ async function renderPub() {
   const done = Math.max(0, total - (+s.remaining || 0));
   setBar("bar_pub", s.enabled ? done : total, total);
   let t = s.enabled ? "PUBLICANDO · quedan " + s.remaining + "/" + s.count : "detenido";
-  if (s.sched_alive === false) t += " · motor PARADO";
+  if (s.alive === false) t += " · motor PARADO";
   if (s.enabled && s.next_at) t += " · próximo " + fmtTime(s.next_at);
   if (s.last && s.last.error) t += "\núltimo error: " + s.last.error;
   $("sstatus").textContent = t;
@@ -223,6 +223,7 @@ function wire() {
 
   $("power").addEventListener("click", async () => {
     const h = await send("test");
+    if (!h || h.ok === false || typeof h.enabled !== "boolean") { alert("Sin conexion con cxtd"); return; }
     const r = await send("setEnabled", !h.enabled);
     if (r && r.error) alert("Error: " + r.error);
     tick();
@@ -259,7 +260,12 @@ function wire() {
   $("pstart").addEventListener("click", async () => {
     const dry = $("pdry").checked;
     if (needConfirm(dry)) return;
-    await send("sharePostSet", { url: $("purl").value, expect: $("pexpect").value, filter: $("pfilter").value, limit: +$("plimit").value || 0, text: $("ptext").value, dry, delay: 8 });
+    const value = { url: $("purl").value.trim(), expect: $("pexpect").value, filter: $("pfilter").value.trim(), limit: +$("plimit").value || 0, text: $("ptext").value, dry, delay: 8 };
+    if (!value.filter && !value.ids) {
+      alert("Indica los grupos (filtro o ids) antes de iniciar");
+      return;
+    }
+    await send("sharePostSet", value);
     tick();
   });
   $("pstop").addEventListener("click", async () => { await send("sharePostSet", { stop: true }); tick(); });

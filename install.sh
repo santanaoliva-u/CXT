@@ -12,9 +12,11 @@ echo "[1/3] building binaries..."
 echo "[2/3] installing helper scripts into ~/.cxt ..."
 DEST="${CXT_DIR:-$HOME/.cxt}"
 mkdir -p "$DEST"
-cp scripts/scheduler.py scripts/clone_publish.py scripts/groups_share.py \
-   scripts/groups_scan.py scripts/news.sh "$DEST/"
-chmod +x "$DEST/news.sh" scripts/news.sh
+for f in scripts/*.py scripts/*.sh; do
+  [ -e "$f" ] || continue
+  cp -f "$f" "$DEST/"
+done
+chmod +x "$DEST"/*.sh
 
 cat <<'EOF'
 

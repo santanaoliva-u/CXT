@@ -21,37 +21,16 @@ Uso:
 import argparse
 import json
 import os
-import subprocess
 import sys
 import time
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-CXT = os.environ.get("CXT_BIN") or os.path.join(HERE, "bin", "cxt")
-TAB = int(os.environ["CXT_TAB"]) if os.environ.get("CXT_TAB") else None
-HOME_DIR = os.path.expanduser("~")
-STATUS = os.path.join(HOME_DIR, ".cxt", "share_post_status.json")
+import cxtlib
+
+CXT = cxtlib.resolve_cxt()
+TAB = cxtlib.resolve_tab(CXT)
+STATUS = os.path.join(cxtlib.resolve_dir(), "share_post_status.json")
+call = cxtlib.caller(CXT)
 EXPECT = ""  # texto que identifica el post a compartir (para el fallback sin ventana)
-
-
-def call(op, args, timeout=120):
-    p = subprocess.run([CXT, op, json.dumps(args)], capture_output=True, text=True, timeout=timeout)
-    try:
-        return json.loads(p.stdout.strip())
-    except Exception:
-        return {"raw": (p.stdout or "")[:300], "err": (p.stderr or "")[:200]}
-
-
-def cdp(expr, timeout=90):
-    r = call("cdp", {"tabId": TAB, "method": "Runtime.evaluate",
-                     "params": {"expression": expr, "returnByValue": True, "awaitPromise": True}}, timeout)
-    try:
-        return r["result"]["result"].get("value")
-    except Exception:
-        return None
-
-
-def click(x, y):
-    return call("cdpclick", {"tabId": TAB, "x": int(x), "y": int(y)})
 
 
 def sleep(ms):
@@ -64,7 +43,7 @@ def log(msg):
 
 def wait_js(expr, tries=12, interval=0.3):
     for _ in range(max(1, tries)):
-        r = cdp(expr)
+        r = cxtlib.cdp(CXT, TAB, expr)
         if r:
             return r
         sleep(int(interval * 1000))
@@ -102,8 +81,6 @@ def js_find_share(expect=""):
  const r=el.getBoundingClientRect();
  return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),scope};})()"""
 
-
-JS_FIND_SHARE = js_find_share("")
 
 JS_POST_CTX = "(()=>{" + JS_VISIBLE + """
  const dlg=[...document.querySelectorAll('div[role=dialog]')].filter(vis).find(d=>d.querySelector('[aria-label="Share"],[aria-label="Compartir"],[role=article]'));
@@ -218,41 +195,23 @@ def js_select_row(name):
 
 
 # ---------------------------------------------------------------- actions
-def ensure_tab():
-    global TAB
-    if TAB is None:
-        r = call("tabs", {})
-        for t in (r if isinstance(r, list) else []):
-            if "facebook.com" in (t.get("url") or ""):
-                TAB = t["id"]
-                break
-    if TAB is None:
-        sys.exit("no encontre pestana de Facebook (set CXT_TAB)")
-    call("tab.activate", {"tabId": TAB})
-
-
-JS_BRING_SHARE = """(()=>{const c=[...document.querySelectorAll('[aria-label="Share"],[aria-label="Compartir"]')];
- const el=c.find(e=>e.closest('[role=dialog]'))||c[0];
- if(el){el.scrollIntoView({block:'center'});return true;}return false;})()"""
-
-
 def open_share():
     # NUNCA Escape aqui: cerraria la VENTANA (modal) del post y compartiriamos
     # el feed de fondo (post equivocado). Si el menu/picker ya esta abierto, listo.
-    if cdp(JS_PICKER) or cdp(JS_MENU):
+    if cxtlib.cdp(CXT, TAB, JS_PICKER) or cxtlib.cdp(CXT, TAB, JS_MENU):
         return True
     for _ in range(3):
         f = None
         for _ in range(10):
-            f = cdp(js_find_share(EXPECT))
+            f = cxtlib.cdp(CXT, TAB, js_find_share(EXPECT))
             if f:
                 break
-            cdp("(()=>{const s=document.scrollingElement||document.documentElement;"
+            cxtlib.cdp(CXT, TAB, "(()=>{const s=document.scrollingElement||document.documentElement;"
                 "s.scrollBy(0,420);window.scrollBy(0,420);return true;})()")
             sleep(250)
         if not f:
             continue
-        click(f["x"], f["y"])
+        cxtlib.click(CXT, TAB, f["x"], f["y"])
         if wait_js(JS_MENU, 16, 0.25):
             return True
         sleep(300)
@@ -260,29 +219,29 @@ def open_share():
 
 
 def open_group_option():
-    if cdp(JS_PICKER):
+    if cxtlib.cdp(CXT, TAB, JS_PICKER):
         return True
     for _ in range(10):
-        g = cdp(JS_GROUP_OPTION)
+        g = cxtlib.cdp(CXT, TAB, JS_GROUP_OPTION)
         if g:
-            click(g["x"], g["y"])
+            cxtlib.click(CXT, TAB, g["x"], g["y"])
             if wait_js(JS_PICKER, 16, 0.25):
-                r = cdp(JS_RESET)      # la extension Multi-Share persiste selecciones: limpiar
+                r = cxtlib.cdp(CXT, TAB, JS_RESET)      # la extension Multi-Share persiste selecciones: limpiar
                 if r:
-                    click(r["x"], r["y"])
+                    cxtlib.click(CXT, TAB, r["x"], r["y"])
                     sleep(400)
                 return True
         else:
-            cdp(JS_SCROLL_MODAL)
+            cxtlib.cdp(CXT, TAB, JS_SCROLL_MODAL)
         sleep(350)
-    return bool(cdp(JS_PICKER))
+    return bool(cxtlib.cdp(CXT, TAB, JS_PICKER))
 
 
 def _type_search(name):
-    cdp(JS_CLEAR_ACTIVE)            # limpia (native setter + input event)
+    cxtlib.cdp(CXT, TAB, JS_CLEAR_ACTIVE)            # limpia (native setter + input event)
     call("cdptype", {"tabId": TAB, "text": name})
     time.sleep(0.8)
-    v = cdp(JS_PICKER_VALUE) or ""
+    v = cxtlib.cdp(CXT, TAB, JS_PICKER_VALUE) or ""
     return len(v) > 0
 
 
@@ -295,12 +254,12 @@ def search_and_select(name):
         wait_js(JS_PICKER, 4, 0.3)
         _type_search(name)
     for _ in range(24):
-        row = cdp(js_select_row(name))
+        row = cxtlib.cdp(CXT, TAB, js_select_row(name))
         if row:
-            click(row["x"], row["y"])
+            cxtlib.click(CXT, TAB, row["x"], row["y"])
             for _ in range(16):     # avanzar = aparece el boton Publicar del paso final
                 sleep(250)
-                if cdp(JS_SUBMIT):
+                if cxtlib.cdp(CXT, TAB, JS_SUBMIT):
                     return True
             return True
         time.sleep(0.35)
@@ -308,21 +267,21 @@ def search_and_select(name):
 
 
 def submit(dry, text=""):
-    aud = cdp(JS_AUDIENCE)
+    aud = cxtlib.cdp(CXT, TAB, JS_AUDIENCE)
     if aud and aud.get("chips") and not aud.get("group"):
         log("   ABORTO: la audiencia no es un grupo -> %s" % aud.get("chips"))
         return {"ok": False, "stage": "audience"}
     if text:
         call("cdptype", {"tabId": TAB, "text": text})
         sleep(250)
-    s = cdp(JS_SUBMIT)
+    s = cxtlib.cdp(CXT, TAB, JS_SUBMIT)
     if not s:
         return {"ok": False, "stage": "submit-not-found"}
     if s.get("disabled"):
         return {"ok": False, "stage": "submit-disabled"}
     if dry:
         return {"ok": True, "dry": True, "label": s.get("label"), "x": s["x"], "y": s["y"]}
-    click(s["x"], s["y"])
+    cxtlib.click(CXT, TAB, s["x"], s["y"])
     time.sleep(2)
     return {"ok": True, "published": True, "label": s.get("label")}
 
@@ -330,23 +289,17 @@ def submit(dry, text=""):
 def close_dialog():
     # cierra SOLO el menu/picker de compartir; NO la ventana (modal) del post.
     for _ in range(3):
-        if not (cdp(JS_PICKER) or cdp(JS_MENU) or cdp(JS_SUBMIT)):
+        if not (cxtlib.cdp(CXT, TAB, JS_PICKER) or cxtlib.cdp(CXT, TAB, JS_MENU) or cxtlib.cdp(CXT, TAB, JS_SUBMIT)):
             return True
         call("cdpkey", {"tabId": TAB, "key": "Escape"})
         call("cdp", {"tabId": TAB, "method": "Page.handleJavaScriptDialog", "params": {"accept": True}})
         sleep(600)
-    return not (cdp(JS_PICKER) or cdp(JS_MENU) or cdp(JS_SUBMIT))
-
-
-def clear_draft():
-    cdp("(()=>{try{for(const e of document.querySelectorAll('[contenteditable=true]'))"
-        "{try{e.focus();e.innerHTML='';e.dispatchEvent(new InputEvent('input',{bubbles:true}));}catch(_){}}"
-        "if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();}catch(_){}return 1;})()")
+    return not (cxtlib.cdp(CXT, TAB, JS_PICKER) or cxtlib.cdp(CXT, TAB, JS_MENU) or cxtlib.cdp(CXT, TAB, JS_SUBMIT))
 
 
 def goto(url):
     call("cdp", {"tabId": TAB, "method": "Page.handleJavaScriptDialog", "params": {"accept": True}})
-    clear_draft()
+    cxtlib.clear_draft(CXT, TAB)
     call("navigate", {"tabId": TAB, "url": url, "timeout": 20000})
     call("cdp", {"tabId": TAB, "method": "Page.handleJavaScriptDialog", "params": {"accept": True}})
     sleep(250)
@@ -355,8 +308,8 @@ def goto(url):
 def context_ok(expect):
     if not expect:
         return True
-    t = cdp(JS_POST_TEXT) or ""
-    return _norm(expect) in _norm(t)
+    t = cxtlib.cdp(CXT, TAB, JS_POST_TEXT) or ""
+    return cxtlib.norm(expect) in cxtlib.norm(t)
 
 
 def share_url_group(url, g, dry, text, expect=""):
@@ -367,17 +320,17 @@ def share_url_group(url, g, dry, text, expect=""):
         goto(url)
         ok = False
         for _ in range(20):
-            if cdp(js_find_share(EXPECT)):
+            if cxtlib.cdp(CXT, TAB, js_find_share(EXPECT)):
                 ok = True
                 break
             sleep(250)
         if not ok:
-            cur = cdp("location.href") or ""
+            cur = cxtlib.cdp(CXT, TAB, "location.href") or ""
             base = cur.split("#")[0].split("?")[0]
             log("aun no veo el post; reintento por permalink: %s" % (base or url))
             goto(base or url)
             for _ in range(20):
-                if cdp(js_find_share(EXPECT)):
+                if cxtlib.cdp(CXT, TAB, js_find_share(EXPECT)):
                     ok = True
                     break
                 sleep(250)
@@ -417,48 +370,24 @@ def share_one(g, dry, text=""):
     return {"ok": False, "stage": "retry-exhausted"}
 
 
-def delay_seconds(base):
-    return max(0, float(base))
-
-
-def _norm(s):
-    import unicodedata
-    return "".join(c for c in unicodedata.normalize("NFD", (s or "").lower()) if unicodedata.category(c) != "Mn")
-
-
 def load_groups():
-    p = os.path.join(HOME_DIR, ".cxt", "groups.json")
-    try:
-        with open(p, encoding="utf-8") as f:
-            return json.load(f).get("groups", [])
-    except Exception:
-        return []
+    return cxtlib.load_json(os.path.join(cxtlib.resolve_dir(), "groups.json")).get("groups", [])
 
 
 def select_groups(ids, filt, limit):
     if ids:
         return [g.strip() for g in ids.split(",") if g.strip()]
-    kws = [_norm(x) for x in (filt or "").split(",") if x.strip()]
+    kws = [cxtlib.norm(x) for x in (filt or "").split(",") if x.strip()]
     if not kws:
         return []
     out = []
     for g in load_groups():
-        n = _norm(g.get("name", ""))
+        n = cxtlib.norm(g.get("name", ""))
         if any(k in n for k in kws):
             out.append(g.get("name") or g.get("id"))
     if limit and limit > 0:
         out = out[:limit]
     return out
-
-
-def write_status(d):
-    try:
-        tmp = STATUS + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False)
-        os.replace(tmp, STATUS)
-    except Exception:
-        pass
 
 
 def run_from_cmd(path):
@@ -472,44 +401,48 @@ def run_from_cmd(path):
     groups = select_groups(cfg.get("ids") or "", cfg.get("filter") or "", limit)
     st = {"running": True, "dry": dry, "total": len(groups), "done": 0, "published": 0,
           "current": "", "results": [], "started_at": int(time.time() * 1000), "finished_at": 0}
-    write_status(st)
+    cxtlib.write_status(STATUS, st)
     log("=== COMPARTIR POST: %d grupos | simulacro=%s | identificar=%r ===" % (len(groups), dry, cfg.get("expect") or ""))
     if not groups:
         log("sin grupos (revisa el filtro o los ids)")
         st.update(running=False, error="sin grupos (revisa filter/ids)", finished_at=int(time.time() * 1000))
-        write_status(st)
+        cxtlib.write_status(STATUS, st)
         return
 
     import signal
     def on_term(*_):
         st.update(running=False, current="", error="detenido", finished_at=int(time.time() * 1000))
-        write_status(st)
+        cxtlib.write_status(STATUS, st)
         sys.exit(0)
     signal.signal(signal.SIGTERM, on_term)
     signal.signal(signal.SIGINT, on_term)
 
-    ensure_tab()
-    for i, g in enumerate(groups):
-        st["current"] = g
-        st["done"] = i
-        write_status(st)
-        log("[%d/%d] %s" % (i + 1, len(groups), g))
-        step = {"group": g}
-        step.update(share_url_group(url, g, dry, text, cfg.get("expect") or ""))
-        if step.get("ok") and not dry:
-            st["published"] = st.get("published", 0) + 1
-        st["results"].append(step)
-        st["done"] = i + 1
-        write_status(st)
-        if i < len(groups) - 1:
-            close_dialog()
-            sleep(int(delay * 1000))
-    st.update(running=False, current="", finished_at=int(time.time() * 1000))
-    write_status(st)
+    global TAB
+    try:
+        TAB = cxtlib.ensure_tab(CXT, TAB)
+        for i, g in enumerate(groups):
+            st["current"] = g
+            st["done"] = i
+            cxtlib.write_status(STATUS, st)
+            log("[%d/%d] %s" % (i + 1, len(groups), g))
+            step = {"group": g}
+            step.update(share_url_group(url, g, dry, text, cfg.get("expect") or ""))
+            if step.get("ok") and not dry:
+                st["published"] = st.get("published", 0) + 1
+            st["results"].append(step)
+            st["done"] = i + 1
+            cxtlib.write_status(STATUS, st)
+            if i < len(groups) - 1:
+                close_dialog()
+                sleep(int(delay * 1000))
+    finally:
+        st.update(running=False, current="", finished_at=int(time.time() * 1000))
+        cxtlib.write_status(STATUS, st)
     log("=== FIN: %d/%d publicados ===" % (st.get("published", 0), len(groups)))
 
 
 def main():
+    global TAB
     ap = argparse.ArgumentParser()
     ap.add_argument("--ids", default="")
     ap.add_argument("--cmd", default="")
@@ -525,7 +458,7 @@ def main():
         return
     if not a.ids:
         sys.exit("usa --ids o --cmd")
-    ensure_tab()
+    TAB = cxtlib.ensure_tab(CXT, TAB)
     groups = [g.strip() for g in a.ids.split(",") if g.strip()]
     results = []
     log("=== COMPARTIR POST: %d grupos | simulacro=%s ===" % (len(groups), a.dry))
@@ -536,7 +469,7 @@ def main():
         results.append(step)
         if i < len(groups) - 1:
             close_dialog()
-            sleep(int(delay_seconds(a.delay) * 1000))
+            sleep(int(max(0.0, a.delay) * 1000))
     log("=== FIN ===")
     print(json.dumps({"dry": a.dry, "results": results}, ensure_ascii=False))
 
