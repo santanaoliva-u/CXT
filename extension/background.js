@@ -52,6 +52,7 @@ function hookDialogs() {
 const pageEnabled = new Set();
 
 const OP_TIMEOUT_MS = 25000;
+const KMAP = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35, PageUp: 33, PageDown: 34, " ": 32 };
 
 function opTimeout(op, args) {
   const explicit = Number((args && args.timeoutMs) || 0);
@@ -90,7 +91,13 @@ function withTimeout(p, ms, tag) {
   });
 }
 
-async function acceptDialog(tabId) {
+async function dialog(tabId, mode) {
+  if (mode === "arm") {
+    try {
+      await cdp(tabId, "Page.enable", {});
+    } catch (e) {}
+    return;
+  }
   try {
     if (tabId == null) {
       const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -105,12 +112,6 @@ async function acceptDialog(tabId) {
         await chrome.debugger.sendCommand({ tabId }, "Page.handleJavaScriptDialog", { accept: true });
       } catch (e2) {}
     }
-  } catch (e) {}
-}
-
-async function armDialog(tabId) {
-  try {
-    await cdp(tabId, "Page.enable", {});
   } catch (e) {}
 }
 const detachTimers = new Map();
@@ -158,6 +159,13 @@ async function cdp(tabId, method, params) {
     scheduleDetach(tabId);
     return r;
   }
+}
+
+async function clickAt(tabId, x, y) {
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" });
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+  await sleep(60);
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
 }
 
 async function loop() {
@@ -223,7 +231,7 @@ async function loop() {
         };
       } catch (e) {
         out = { id: cmd.id, ok: false, error: String(e && e.message ? e.message : e) };
-        if (e && e.timeout) await acceptDialog(cmd.args && cmd.args.tabId);
+        if (e && e.timeout) await dialog(cmd.args && cmd.args.tabId, "accept");
       }
       if (Date.now() - lastStore > 1500) {
         lastStore = Date.now();
@@ -305,7 +313,7 @@ async function exec(op, args) {
       try {
         t = await withTimeout(chrome.tabs.update(args.tabId, { active: true }), 8000, "tab.activate");
       } catch (e) {
-        await acceptDialog(args.tabId);
+        await dialog(args.tabId, "accept");
         t = await withTimeout(chrome.tabs.update(args.tabId, { active: true }), 8000, "tab.activate");
       }
       if (t.windowId != null) {
@@ -322,14 +330,14 @@ async function exec(op, args) {
     case "navigate": {
       if (!args.url) return { ok: false, error: "navigate: falta url" };
       const t = await resolveTab(args);
-      await armDialog(t.id);
+      await dialog(t.id, "arm");
       const nav = chrome.tabs.update(t.id, { url: args.url }).then(() => true, () => false);
       const committed = await Promise.race([nav, sleep(6000).then(() => false)]);
       if (!committed) {
         try {
           await cdp(t.id, "Page.navigate", { url: args.url });
         } catch (e) {}
-        await acceptDialog(t.id);
+        await dialog(t.id, "accept");
       }
       await waitLoad(t.id, args.timeout || 30000);
       const nt = await chrome.tabs.get(t.id);
@@ -376,10 +384,7 @@ async function exec(op, args) {
       const t = await resolveTab(args);
       const x = args.x;
       const y = args.y;
-      await cdp(t.id, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" });
-      await cdp(t.id, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-      await sleep(60);
-      await cdp(t.id, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+      await clickAt(t.id, x, y);
       return { clicked: true, x, y };
     }
     case "cdptype": {
@@ -390,7 +395,6 @@ async function exec(op, args) {
     case "cdpkey": {
       const t = await resolveTab(args);
       const key = args.key || "Enter";
-      const KMAP = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35, PageUp: 33, PageDown: 34, " ": 32 };
       const code = KMAP[key] != null ? KMAP[key] : key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0;
       await cdp(t.id, "Input.dispatchKeyEvent", { type: "keyDown", key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code });
       await cdp(t.id, "Input.dispatchKeyEvent", { type: "keyUp", key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code });
@@ -412,10 +416,7 @@ async function exec(op, args) {
       if (!p) return { clicked: false, found: false, candidates: items.length };
       const x = p.x + Math.floor(p.w / 2);
       const y = p.y + Math.floor(p.h / 2);
-      await cdp(t.id, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" });
-      await cdp(t.id, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-      await sleep(60);
-      await cdp(t.id, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+      await clickAt(t.id, x, y);
       return { clicked: true, x, y, tag: p.tag, text: p.text, match_level: p.match || null, click_method: "cdp" };
     }
     case "cdpclickref": {
@@ -430,10 +431,7 @@ async function exec(op, args) {
       if (!b || !b.found) return { clicked: false, found: false, ref: args.ref || null };
       const x = b.x + Math.floor(b.w / 2);
       const y = b.y + Math.floor(b.h / 2);
-      await cdp(t.id, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" });
-      await cdp(t.id, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-      await sleep(60);
-      await cdp(t.id, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+      await clickAt(t.id, x, y);
       return { clicked: true, ref: args.ref, x, y, tag: b.tag, match_level: "exact", click_method: "cdp" };
     }
     case "snapshot": {
@@ -448,39 +446,6 @@ async function exec(op, args) {
       if (args.text) {
         return { mode: "query", kept: items.length, text: snapText(items, args) };
       }
-      const cur = new Map();
-      for (const it of items) cur.set(it.role + "|" + it.name, it);
-      const prev = snapState.get(t.id);
-      if (args.delta && prev) {
-        const lines = [];
-        let added = 0;
-        let removed = 0;
-        let changed = 0;
-        for (const [k, it] of cur) {
-          const p = prev.get(k);
-          if (!p) {
-            added++;
-            lines.push("+ " + snapLine(it));
-          } else if (p.sig !== it.sig) {
-            changed++;
-            lines.push("~ " + snapLine(it));
-          }
-        }
-        for (const [k, p] of prev) {
-          if (!cur.has(k)) {
-            removed++;
-            lines.push('- ' + p.role + ' "' + p.name + '"');
-          }
-        }
-        snapState.set(t.id, cur);
-        capSnap();
-        const cap = args.maxChars || 6000;
-        let body = lines.join("\n");
-        if (body.length > cap) body = body.slice(0, cap) + "\n...[truncado]";
-        return { mode: "delta", added, removed, changed, text: body || "(sin cambios)" };
-      }
-      snapState.set(t.id, cur);
-      capSnap();
       return { mode: args.mode || "act", total: res.total, kept: items.length, text: snapText(items, args) };
     }
     case "probe": {
@@ -492,15 +457,9 @@ async function exec(op, args) {
       });
       return (r && r.result) || { ok: false, n: 0 };
     }
-    case "batch":
-    case "macro": {
+    case "batch": {
       const t = await resolveTab(args);
-      let steps = args.steps || null;
-      if (op === "macro" || args.name) {
-        const m = MACROS[args.name];
-        if (!m) return { ok: false, error: "macro desconocida: " + (args.name || "") };
-        steps = m;
-      }
+      const steps = args.steps || null;
       if (!steps || !steps.length) return { ok: false, error: "sin pasos" };
       const sub = (v) => (typeof v === "string" ? v.split("$TEXT").join(args.text || "") : v);
       const results = [];
@@ -540,27 +499,6 @@ async function exec(op, args) {
   }
 }
 
-const snapState = new Map();
-const SNAP_MAX = 8;
-function capSnap() {
-  while (snapState.size > SNAP_MAX) snapState.delete(snapState.keys().next().value);
-}
-
-const MACROS = {
-  "fb.post": [
-    { op: "cdpclicktext", args: { text: "pensando", selector: "*", minW: 150, minH: 25, maxH: 130 }, require: true },
-    { op: "wait", args: { ms: 1800 } },
-    { op: "probe", args: { selector: "[contenteditable='true']" }, require: true },
-    { op: "cdptype", args: { value: "$TEXT" }, require: true },
-    { op: "wait", args: { ms: 500 } },
-    { op: "cdpclicktext", args: { text: "siguiente", minW: 60 } },
-    { op: "wait", args: { ms: 2500 } },
-    { op: "cdpclicktext", args: { text: "publicar", minW: 120 } },
-    { op: "wait", args: { ms: 2500 } },
-    { op: "probe", args: { text: "$TEXT" } },
-  ],
-};
-
 const RESULT_KEYS = {
   ping: ["pong"],
   click: ["clicked", "tag", "text", "match_level", "click_method"],
@@ -580,10 +518,9 @@ const RESULT_KEYS = {
   back: ["url"],
   forward: ["url"],
   probe: ["ok", "n", "ref"],
-  snapshot: ["mode", "total", "kept", "added", "removed", "changed"],
+  snapshot: ["mode", "total", "kept"],
   read: ["url", "title", "chars"],
   eval: ["value", "error"],
-  macro: ["ok", "steps"],
   batch: ["ok", "steps"],
 };
 
@@ -1027,7 +964,7 @@ async function watchdog() {
   runningSince = 0;
   try {
     const tabs = await chrome.tabs.query({ url: "*://*.facebook.com/*" });
-    for (const t of tabs) await acceptDialog(t.id);
+    for (const t of tabs) await dialog(t.id, "accept");
   } catch (e) {}
   try {
     if (pollCtl) pollCtl.abort();

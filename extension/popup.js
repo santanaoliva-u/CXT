@@ -60,6 +60,12 @@ function setBadge(id, show, text) {
   b.classList.toggle("show", !!show);
 }
 
+function setProgress(id, s, verb, done) {
+  $(id).textContent = s.total
+    ? (s.running ? verb : "terminado") + " · " + done + "/" + s.total + (s.current ? "\nahora: " + s.current : "")
+    : "sin ejecutar";
+}
+
 function renderList(id, arr, fmt) {
   const el = $(id);
   if (!el) return;
@@ -147,9 +153,7 @@ async function renderPub() {
 async function renderSharePost() {
   const s = await send("sharePostGet");
   setBar("bar_sharepost", s.done || 0, s.total || 0);
-  $("pstatus").textContent = s.total
-    ? (s.running ? "compartiendo…" : "terminado") + " · " + (s.published || 0) + "/" + s.total + (s.current ? "\nahora: " + s.current : "")
-    : "sin ejecutar";
+  setProgress("pstatus", s, "compartiendo…", s.published || 0);
   renderList("presults", s.results, (r) => [r.ok, (r.group || "") + (r.stage && !r.ok ? "  (" + r.stage + ")" : "") + (r.dry ? "  [simulacro]" : "")]);
   setBadge("b_share", s.running || (s.total && (s.published || 0) < s.total), s.total ? (s.done || 0) + "/" + s.total : "");
   await setLog(JOB.sharepost, "log_sharepost", !!s.running);
@@ -158,9 +162,7 @@ async function renderSharePost() {
 async function renderShare() {
   const s = await send("shareGet");
   setBar("bar_share", s.done || 0, s.total || 0);
-  $("gstatus").textContent = s.total
-    ? (s.running ? "publicando…" : "terminado") + " · " + (s.published || 0) + "/" + s.total + (s.current ? "\nahora: " + s.current : "")
-    : "sin ejecutar";
+  setProgress("gstatus", s, "publicando…", s.published || 0);
   renderList("gresults", s.results, (r) => [r.ok, (r.name || "") + (r.stage && !r.ok ? "  (" + r.stage + ")" : "")]);
   await setLog(JOB.share, "log_share", !!s.running);
 }
@@ -168,9 +170,7 @@ async function renderShare() {
 async function renderComment() {
   const s = await send("commentGet");
   setBar("bar_com", s.done || 0, s.total || 0);
-  $("cstatus").textContent = s.total
-    ? (s.running ? "comentando…" : "terminado") + " · " + (s.posted || 0) + "/" + s.total + (s.current ? "\nahora: " + s.current : "")
-    : "sin ejecutar";
+  setProgress("cstatus", s, "comentando…", s.posted || 0);
   renderList("cresults", s.results, (r) => [r.ok, "#" + r.i + " " + (r.text || "") + (r.stage && !r.ok ? "  (" + r.stage + ")" : "")]);
   setBadge("b_com", !!s.running, s.total ? (s.done || 0) + "/" + s.total : "");
   await setLog(JOB.com, "log_com", !!s.running);
