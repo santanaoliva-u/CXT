@@ -215,6 +215,12 @@ check("item no intentado sigue pendiente", _it4["state"] == "pendiente", _it4)
 check("item_key usa el permalink normalizado",
       AP.item_key({"url": _u + "?ref=share"}) == AP.permalink_key(_u),
       AP.item_key({"url": _u + "?ref=share"}))
+check("item_key dry agrega sufijo :dry",
+      AP.item_key({"url": _u, "dry": True}) == AP.permalink_key(_u) + ":dry",
+      AP.item_key({"url": _u, "dry": True}))
+check("item_key real NO lleva sufijo",
+      AP.item_key({"url": _u, "dry": False}) == AP.permalink_key(_u),
+      AP.item_key({"url": _u, "dry": False}))
 
 # 13b. read_queue nunca modifica la cola y aplica el registro de intentos --
 with open(AP.QUEUE, "w", encoding="utf-8") as _f:
@@ -299,8 +305,9 @@ AP.run_share = _orig_run_share
 AP.STATUS = _orig_status
 
 # 18. un dry-run NO contamina el registro de intentos del worker ------------
-#     Un dry NO debe marcar a-lo-mas-una-vez: si lo hiciera, un share REAL
-#     posterior del MISMO permalink quedaria silenciosamente saltado.
+#     Un dry NO debe marcar la clave real a-lo-mas-una-vez: si lo hiciera, un
+#     share REAL posterior del MISMO permalink quedaria silenciosamente
+#     saltado. Usa clave con sufijo ":dry" para que el fallo se persista.
 _orig_run_share18 = AP.run_share
 _orig_status18 = AP.STATUS
 AP.STATUS = os.path.join(_TMP, "autopost_status.json")
@@ -309,8 +316,9 @@ AP.run_share = lambda item: {"results": [{"ok": True}]}
 
 _u18 = "https://www.facebook.com/groups/77/posts/770/"
 _key18 = AP.permalink_key(_u18)
+_key18_dry = AP.item_key({"url": _u18, "dry": True})
 
-# 18.1 dry exitoso: en results como hecho, sin tope diario, sin intento
+# 18.1 dry exitoso: en results como hecho, sin tope diario, sin intento real
 _stdry = AP.default_status()
 AP.roll_day(_stdry, "2026-01-01")
 AP._publish(_stdry, {}, [], {"url": _u18, "dry": True, "state": "pendiente"},
@@ -320,10 +328,10 @@ check("18 dry ok: aparece en results como hecho",
       _stdry.get("results"))
 check("18 dry ok: NO incrementa done_today", _stdry.get("done_today") == 0, _stdry.get("done_today"))
 _att18 = AP.load_attempts()
-check("18 dry ok: el permalink NO queda 'hecho' en el registro de intentos",
-      (_att18.get(_key18) or {}).get("state") != "hecho", _att18)
-check("18 dry ok: el permalink ni siquiera aparece en intentos",
+check("18 dry ok: el permalink real NO queda en intentos",
       _key18 not in _att18, _att18)
+check("18 dry ok: la clave :dry SI queda hecho (evita reintento infinito)",
+      (_att18.get(_key18_dry) or {}).get("state") == "hecho", _att18)
 
 # 18.2 el MISMO permalink encolado para REAL: la cola NO lo salta
 with open(AP.QUEUE, "w", encoding="utf-8") as _f:
@@ -349,6 +357,27 @@ with open(AP.QUEUE, "w", encoding="utf-8") as _f:
 _q18b = AP.read_queue()
 check("18 segundo real: el permalink ya 'hecho' no se vuelve a elegir",
       AP.pick_pending(_q18b["items"], 2_000_000_000_000) is None, _q18b["items"])
+
+# 18.5 un dry FALLIDO se persiste como error (no se reintenta para siempre)
+AP.save_attempts({})
+AP.run_share = lambda item: {"results": [{"ok": False}]}
+_u18f = "https://www.facebook.com/groups/78/posts/780/"
+_stdryf = AP.default_status()
+AP.roll_day(_stdryf, "2026-01-01")
+AP._publish(_stdryf, {}, [], {"url": _u18f, "dry": True, "state": "pendiente"},
+            3_000_000_000_000)
+check("18 dry fail: item marcado error en results",
+      _stdryf["results"][0]["state"] == "error", _stdryf.get("results"))
+_att18f = AP.load_attempts()
+check("18 dry fail: clave :dry queda error (no se re-pick)",
+      (_att18f.get(AP.item_key({"url": _u18f, "dry": True})) or {}).get("state") == "error",
+      _att18f)
+_it18f = {"url": _u18f, "dry": True, "state": "pendiente"}
+AP.recover_states([_it18f], AP.load_attempts())
+check("18 dry fail: recover_states deja el dry en error",
+      _it18f["state"] == "error", _it18f)
+check("18 dry fail: el permalink real NO queda marcado (share real posible)",
+      AP.permalink_key(_u18f) not in AP.load_attempts(), AP.load_attempts())
 
 AP.run_share = _orig_run_share18
 AP.STATUS = _orig_status18

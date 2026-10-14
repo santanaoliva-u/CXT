@@ -154,17 +154,22 @@ def permalink_key(url):
     return cxtlib.norm(u)
 
 
-def item_key(item):
+def item_key(item, dry=None):
     """Clave estable del item para el registro de intentos.
 
-    Permalink si lo hay; si no, el `expect`; y como ultimo recurso el texto."""
+    Permalink si lo hay; si no, el `expect`; y como ultimo recurso el texto.
+    Un dry-run lleva sufijo ":dry" en su clave: asi un fallo de simulacion se
+    persiste (no se reintenta para siempre) pero NO contamina el a-lo-mas-
+    una-vez del share real del mismo permalink."""
+    if dry is None:
+        dry = bool(item.get("dry", False))
     key = permalink_key(item.get("url"))
     if key:
-        return key
+        return key + (":dry" if dry else "")
     exp = cxtlib.norm(item.get("expect") or "")
     if exp:
-        return "expect:" + exp
-    return "text:" + cxtlib.norm(item.get("text") or "")
+        return "expect:" + exp + (":dry" if dry else "")
+    return "text:" + cxtlib.norm(item.get("text") or "") + (":dry" if dry else "")
 
 
 def dedupe_items(items):
@@ -258,14 +263,21 @@ def recover_states(items, attempts=None):
 
     - Un estado persistido "publicando" ya se intento -> "hecho".
     - Si el registro de intentos tiene la clave, ese item ya se intento:
-      "publicando"/"hecho" -> hecho, "error" -> error. Nunca se re-comparte."""
+      "publicando"/"hecho" -> hecho, "error" -> error. Nunca se re-comparte.
+    - Un dry usa clave con sufijo ":dry" (ver item_key): su fallo persiste
+      como "error" en la cola en memoria sin bloquear el share real del
+      mismo permalink (clave sin sufijo, distinta)."""
     if attempts is None:
         attempts = load_attempts()
     for it in items:
         if (it.get("state") or "pendiente") == "publicando":
             it["state"] = "hecho"
             it["error"] = it.get("error") or "recuperado tras reinicio"
-        a = attempts.get(item_key(it)) if attempts else None
+        if not attempts:
+            continue
+        a = attempts.get(item_key(it))
+        if not a and it.get("dry"):
+            a = attempts.get(item_key(it, dry=True))
         if not a:
             continue
         stt = a.get("state")
@@ -586,12 +598,12 @@ def _refresh_pending(st, items=None):
 def _publish(st, q, items, item, now):
     # A-lo-mas-una-vez: se marca "publicando" en el registro de intentos del
     # worker ANTES de invocar share. NO se escribe autoqueue.json.
-    # La a-lo-mas-una-vez solo aplica a shares reales: un dry que marcara
-    # "hecho" bloquearia el share real posterior del mismo permalink.
+    # Clave de intentos con sufijo ":dry" para simulaciones: un fallo dry se
+    # persiste (no se reintenta para siempre) pero NO contamina el
+    # a-lo-mas-una-vez del share real del mismo permalink.
     dry = bool(item.get("dry", False))
-    key = item_key(item)
-    if not dry:
-        attempt_mark(key, "publicando")
+    key = item_key(item, dry=dry)
+    attempt_mark(key, "publicando")
     item["state"] = "publicando"
     item["error"] = ""
     item["at"] = item.get("at") or now
@@ -615,8 +627,7 @@ def _publish(st, q, items, item, now):
     item["state"] = "hecho" if res.get("ok") else "error"
     item["error"] = res.get("error") or ""
     item["done_ms"] = int(time.time() * 1000)
-    if not dry:
-        attempt_mark(key, item["state"], item["error"])
+    attempt_mark(key, item["state"], item["error"])
 
     st["results"] = (st.get("results") or [])[-99:] + [{
         "url": item.get("url") or "", "state": item["state"],
@@ -633,7 +644,7 @@ def _publish(st, q, items, item, now):
     st["current"] = None
     interval = effective_interval(item, q)
     st["interval_min"] = interval
-    st["next_at"] = next_at_for(int(time.time() * 1000), interval)
+    st["next_at"] = next_at_for(now, interval)
     st["pending"] = count_pending(items)
     log("item %s ok=%s %s" % (item["state"], res.get("ok"), _label(item)))
     write_status(st)
