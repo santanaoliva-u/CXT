@@ -1001,7 +1001,6 @@ const API = {
   shareSet: { path: "/sharegroups", method: "POST" },
   sharePostGet: { path: "/sharepost" },
   sharePostSet: { path: "/sharepost", method: "POST" },
-  autopostGet: { path: "/autopost" },
   autopostSet: { path: "/autopost", method: "POST" },
   commentGet: { path: "/comment" },
   commentSet: { path: "/comment", method: "POST" },
@@ -1077,10 +1076,12 @@ chrome.runtime.onMessage.addListener((msg, _s, send) => {
   if (msg.type === "autoStats") {
     try {
       const v = msg.value && typeof msg.value === "object" ? msg.value : {};
-      autoStatsCache = { tagged: +v.tagged || 0, injected: +v.injected || 0, errors: +v.errors || 0 };
+      autoStatsCache = { tagged: +v.tagged || 0, errors: +v.errors || 0 };
       const p = chrome.storage.local.set({ autoStats: autoStatsCache });
-      if (p && p.catch) p.catch(() => {});
-    } catch (e) {}
+      if (p && p.catch) p.catch((e) => console.error(e));
+    } catch (e) {
+      console.error(e);
+    }
     send({ ok: true });
     return true;
   }

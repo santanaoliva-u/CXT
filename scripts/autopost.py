@@ -52,6 +52,11 @@ LOOP_SLEEP = float(os.environ.get("CXT_AUTO_LOOP", 2))
 # Cota dura del share: el plan fija 420 s (7 min); un share colgado no puede
 # bloquear el bucle de 2 s ni el sondeo del kill-switch mas de eso.
 SHARE_TIMEOUT = int(os.environ.get("CXT_AUTO_SHARE_TIMEOUT", "420"))
+# Cota del registro de intentos (crece con cada permalink visto). El TTL debe
+# ser >= la caducidad de la cola (7 dias) para no re-compartir un item aun
+# pendiente; los intentos "publicando" (en vuelo) NUNCA se podan.
+ATTEMPTS_MAX = int(os.environ.get("CXT_AUTO_ATTEMPTS_MAX", "1000"))
+ATTEMPTS_TTL_MS = int(float(os.environ.get("CXT_AUTO_ATTEMPTS_TTL_DAYS", "30")) * 24 * 3600 * 1000)
 
 CHECKPOINT_PAT = ("/checkpoint", "/recover")
 
@@ -169,9 +174,40 @@ def load_attempts():
     return a if isinstance(a, dict) else {}
 
 
+def prune_attempts(a, now_ms=None):
+    """Acota el registro de intentos para que no crezca sin limite.
+
+    Conserva SIEMPRE los estados "publicando" (intentos en vuelo) porque son los
+    que garantizan la a-lo-mas-una-vez tras un reinicio; descarta lo mas viejo
+    que el TTL y, si aun sobra, deja las N entradas mas recientes."""
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+    keep = {}
+    rest = []
+    for k, v in a.items():
+        if not isinstance(v, dict):
+            continue
+        if v.get("state") == "publicando":
+            keep[k] = v
+            continue
+        try:
+            at = int(v.get("at") or 0)
+        except (TypeError, ValueError):
+            at = 0
+        if at and (int(now_ms) - at) > ATTEMPTS_TTL_MS:
+            continue
+        rest.append((k, v))
+    if len(keep) + len(rest) > ATTEMPTS_MAX:
+        rest.sort(key=lambda kv: int(kv[1].get("at") or 0), reverse=True)
+        rest = rest[:max(0, ATTEMPTS_MAX - len(keep))]
+    for k, v in rest:
+        keep[k] = v
+    return keep
+
+
 def save_attempts(a):
     try:
-        cxtlib.write_json_atomic(ATTEMPTS, a)
+        cxtlib.write_json_atomic(ATTEMPTS, prune_attempts(a))
     except Exception as e:
         log("save_attempts err " + str(e))
 
@@ -576,10 +612,17 @@ def _publish(st, q, items, item, now):
 
 
 def _tick(st, cmd_path):
+    q = read_queue()
+    # La cola es la fuente de verdad de la pausa operativa: el daemon escribe
+    # q.paused (popup PAUSAR/REANUDAR). Se sincroniza cada tick, antes del gate.
+    st["pausado"] = bool(q.get("paused"))
+
     cmd = consume_cmd(cmd_path)
     if cmd.get("stop"):
         log("stop (cmd)")
         return "stop"
+    # Escape manual legacy (docstring: --cmd <cmd-file>): el daemon ya NO escribe
+    # autopost.cmd.json, asi que esto solo sobreescribe la pausa en este tick.
     if cmd.get("action") == "pause":
         st["pausado"] = bool(cmd.get("value"))
         log("cmd pause=%s" % st["pausado"])
@@ -627,7 +670,6 @@ def _tick(st, cmd_path):
         write_status(st)
         return
 
-    q = read_queue()
     items = q.get("items") or []
     now = int(time.time() * 1000)
     roll_day(st, time.strftime("%Y-%m-%d"))

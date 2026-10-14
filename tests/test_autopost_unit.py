@@ -332,6 +332,60 @@ check("18 segundo real: el permalink ya 'hecho' no se vuelve a elegir",
 AP.run_share = _orig_run_share18
 AP.STATUS = _orig_status18
 
+# 19. _tick sincroniza st["pausado"] desde q["paused"] (pausa operativa) ------
+#     El popup escribe q.paused via /autopost; el worker debe reflejarlo en cada
+#     tick (antes del gate), no solo al arrancar.
+_orig_health = AP.health
+_orig_read_queue = AP.read_queue
+_orig_dedicated = AP._dedicated_tab
+_orig_checkpoint = AP.checkpoint_now
+_orig_status19 = AP.STATUS
+AP.STATUS = os.path.join(_TMP, "autopost_status.json")
+AP.health = lambda: {"enabled": True, "share_alive": False, "share_post_alive": False}
+AP._dedicated_tab = lambda: None
+AP.checkpoint_now = lambda tab: ""
+_no_cmd = os.path.join(_TMP, "no-cmd.json")
+
+_st_pause = AP.default_status()
+AP.read_queue = lambda: {"paused": True, "items": []}
+AP._tick(_st_pause, _no_cmd)
+check("_tick: q.paused=True -> st['pausado'] True",
+      _st_pause.get("pausado") is True, _st_pause.get("pausado"))
+
+_st_resume = AP.default_status()
+_st_resume["pausado"] = True
+AP.read_queue = lambda: {"paused": False, "items": []}
+AP._tick(_st_resume, _no_cmd)
+check("_tick: q.paused=False -> st['pausado'] False (REANUDAR)",
+      _st_resume.get("pausado") is False, _st_resume.get("pausado"))
+
+AP.health = _orig_health
+AP.read_queue = _orig_read_queue
+AP._dedicated_tab = _orig_dedicated
+AP.checkpoint_now = _orig_checkpoint
+AP.STATUS = _orig_status19
+
+# 20. prune_attempts acota el registro sin romper a-lo-mas-una-vez -----------
+_now20 = 100_000_000_000_000
+_old = {"state": "hecho", "at": _now20 - (AP.ATTEMPTS_TTL_MS + 1000)}
+_fresh = {"state": "hecho", "at": _now20 - 1000}
+_pruned = AP.prune_attempts({"old": _old, "fresh": _fresh}, _now20)
+check("prune: descarta 'hecho' mas viejo que el TTL", "old" not in _pruned, _pruned)
+check("prune: conserva 'hecho' reciente", "fresh" in _pruned, _pruned)
+check("prune: conserva 'publicando' aunque sea viejo",
+      "pin" in AP.prune_attempts({"pin": {"state": "publicando", "at": 1}}, _now20),
+      AP.prune_attempts({"pin": {"state": "publicando", "at": 1}}, _now20))
+_orig_max = AP.ATTEMPTS_MAX
+AP.ATTEMPTS_MAX = 3
+_many = {"k%d" % i: {"state": "hecho", "at": _now20 - i} for i in range(10)}
+_many["pin"] = {"state": "publicando", "at": 1}
+_capped = AP.prune_attempts(_many, _now20)
+check("prune: respeta el tope conservando 'publicando'",
+      len(_capped) == 3 and "pin" in _capped, _capped)
+check("prune: bajo el tope guarda los mas recientes",
+      "k0" in _capped and "k9" not in _capped, sorted(_capped))
+AP.ATTEMPTS_MAX = _orig_max
+
 print()
 print("RESULT: " + ("PASS" if not fails else "FAIL " + ",".join(fails)))
 sys.exit(0 if not fails else 1)

@@ -519,7 +519,9 @@ func readAutoQueue() autoQueue {
 	if err != nil {
 		return q
 	}
-	_ = json.Unmarshal(b, &q)
+	if err := json.Unmarshal(b, &q); err != nil {
+		log.Printf("autoqueue.json corrupto: %v", err)
+	}
 	if q.Items == nil {
 		q.Items = []any{}
 	}

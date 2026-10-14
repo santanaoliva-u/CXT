@@ -14,8 +14,7 @@ if (!window.__cxtAuto) {
     var MENU_LABELS = ["compartir en un grupo", "share to a group", "compartir ahora", "share now"];
     var TRACK_PARAMS = ["__cft__", "__tn__", "comment_id", "reply_comment_id"];
 
-    var stats = { tagged: 0, injected: 0, errors: 0 };
-    var processed = new WeakSet(); // contenedores-post ya inyectados
+    var stats = { tagged: 0, errors: 0 };
     var skipped = new WeakSet();   // role=article descartados (p. ej. comentarios)
     var registry = new Map();      // contenedor -> registro del control inyectado
     var shadowRoots = new Set();
@@ -160,7 +159,6 @@ if (!window.__cxtAuto) {
       registry.set(container, rec);
       wireControl(rec);
       stats.tagged++;
-      stats.injected++;
       return true;
     }
 
@@ -175,10 +173,9 @@ if (!window.__cxtAuto) {
         return; // ya evaluado y descartado (no es publicación)
       }
 
-      var isPost = false;
-      try { isPost = injectControl(container); } catch (e) { stats.errors++; }
-      if (isPost) processed.add(container);
-      else skipped.add(container);
+      try {
+        if (!injectControl(container)) skipped.add(container);
+      } catch (e) { stats.errors++; }
     }
 
     // Libera los contenedores retirados por FB para no dejar nodos zombis.
@@ -234,7 +231,7 @@ if (!window.__cxtAuto) {
       var j = JSON.stringify(stats);
       if (j === lastStats) return;
       lastStats = j;
-      request("autoStats", { tagged: stats.tagged, injected: stats.injected, errors: stats.errors });
+      request("autoStats", { tagged: stats.tagged, errors: stats.errors });
     }
 
     // --- acción Automatizar ---
