@@ -93,6 +93,25 @@ def interval_ms(mins, rng=None):
     return max(lo, min(hi, jitter_ms(clamp_interval(mins) * 60000, rng)))
 
 
+def effective_interval(item=None, q=None):
+    """Intervalo efectivo (min) para el item en curso, con prioridad (T23):
+
+      1. el `interval_min` del PROPIO item en curso/siguiente
+      2. el `interval_min` de nivel superior de la cola
+      3. el recomendado INTERVAL_REC
+
+    El modal envia `interval_min` como campo de nivel superior del POST
+    /autopost; el daemon funde esos defaults DENTRO de cada item
+    (server/main.go mergeAutopostDefaults), de modo que la eleccion del usuario
+    vive en el item. Leer solo q["interval_min"] (clave que el daemon nunca
+    escribe) hacia que el intervalo efectivo fuera siempre REC. Se clampa a
+    [MIN, MAX] igual que antes."""
+    for src in (item, q):
+        if isinstance(src, dict) and src.get("interval_min") is not None:
+            return clamp_interval(src.get("interval_min"))
+    return clamp_interval(INTERVAL_REC)
+
+
 def first_next_at(now_ms):
     return int(now_ms) + int(INTERVAL_REC * 60000)
 
@@ -612,7 +631,7 @@ def _publish(st, q, items, item, now):
     else:
         st["dom"]["errors"] = int(st["dom"].get("errors", 0)) + 1
     st["current"] = None
-    interval = clamp_interval(q.get("interval_min") or st.get("interval_min") or INTERVAL_REC)
+    interval = effective_interval(item, q)
     st["interval_min"] = interval
     st["next_at"] = next_at_for(int(time.time() * 1000), interval)
     st["pending"] = count_pending(items)

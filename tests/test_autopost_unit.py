@@ -18,6 +18,7 @@ Uso: python3 tests/test_autopost_unit.py   (exit 0 = PASS)
 import os
 import sys
 import tempfile
+import time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 for _p in (_HERE, os.path.join(_HERE, "..", "scripts")):
@@ -405,6 +406,79 @@ check("prune: respeta el tope conservando 'publicando'",
 check("prune: bajo el tope guarda los mas recientes",
       "k0" in _capped and "k9" not in _capped, sorted(_capped))
 AP.ATTEMPTS_MAX = _orig_max
+
+# 21. intervalo efectivo: item > cola top-level > REC (T23) ---------------
+#     El modal envia interval_min como campo de nivel superior del POST
+#     /autopost; el daemon lo funde DENTRO de cada item (mergeAutopostDefaults).
+#     El worker DEBE honrar el valor del item en curso; leer solo la cola
+#     top-level hacia que el intervalo efectivo fuera siempre REC (15).
+check("effective_interval(item 10) == 10",
+      AP.effective_interval({"interval_min": 10}, {}) == 10,
+      AP.effective_interval({"interval_min": 10}, {}))
+check("effective_interval(item 30) == 30",
+      AP.effective_interval({"interval_min": 30}, {}) == 30,
+      AP.effective_interval({"interval_min": 30}, {}))
+check("effective_interval(item 60) == 60",
+      AP.effective_interval({"interval_min": 60}, {}) == 60,
+      AP.effective_interval({"interval_min": 60}, {}))
+check("effective_interval sin intervalo en ningun sitio -> REC",
+      AP.effective_interval({}, {}) == AP.INTERVAL_REC,
+      AP.effective_interval({}, {}))
+check("effective_interval clampea por debajo de MIN (item 1 -> 10)",
+      AP.effective_interval({"interval_min": 1}, {}) == AP.INTERVAL_MIN,
+      AP.effective_interval({"interval_min": 1}, {}))
+check("effective_interval clampea por encima de MAX (item 999 -> 60)",
+      AP.effective_interval({"interval_min": 999}, {}) == AP.INTERVAL_MAX,
+      AP.effective_interval({"interval_min": 999}, {}))
+check("effective_interval: la cola top-level es respaldo si el item no lo trae",
+      AP.effective_interval({}, {"interval_min": 30}) == 30,
+      AP.effective_interval({}, {"interval_min": 30}))
+check("effective_interval: el item GANA a la cola top-level",
+      AP.effective_interval({"interval_min": 60}, {"interval_min": 10}) == 60,
+      AP.effective_interval({"interval_min": 60}, {"interval_min": 10}))
+
+# 21b. _publish usa el intervalo del item (no siempre 15) y conserva la banda.
+_orig_run_share21 = AP.run_share
+_orig_status21 = AP.STATUS
+AP.STATUS = os.path.join(_TMP, "autopost_status.json")
+AP.run_share = lambda item: {"results": [{"ok": True}]}
+_lo21 = int(AP.INTERVAL_MIN * 60000)
+_hi21 = int(AP.INTERVAL_MAX * 60000)
+for _pick in (10, 30, 60):
+    _st21 = AP.default_status()
+    AP.roll_day(_st21, "2026-01-01")
+    _t21 = int(time.time() * 1000)
+    AP._publish(_st21, {"interval_min": _pick},
+                [], {"url": "https://www.facebook.com/groups/21/posts/%d/" % _pick,
+                     "interval_min": _pick, "dry": True, "state": "pendiente"},
+                _t21)
+    check("_publish item interval_min=%d -> st.interval_min == %d" % (_pick, _pick),
+          _st21.get("interval_min") == _pick, _st21.get("interval_min"))
+    _delay = int(_st21.get("next_at", 0)) - _t21
+    check("_publish item interval_min=%d -> next_at en banda [10,60] min" % _pick,
+          _lo21 <= _delay <= _hi21, _delay)
+    check("_publish item interval_min=%d -> next_at con el jitter del elegido" % _pick,
+          int(_pick * 60000 * 0.70) <= _delay <= int(_pick * 60000 * 1.30), _delay)
+
+# 21c. sin intervalo en ningun sitio -> _publish cae a REC (15).
+_st21r = AP.default_status()
+AP.roll_day(_st21r, "2026-01-01")
+AP._publish(_st21r, {}, [], {"url": "https://www.facebook.com/groups/21/posts/rec/",
+                             "dry": True, "state": "pendiente"}, 1_000_000_000_000)
+check("_publish sin intervalo -> st.interval_min == REC",
+      _st21r.get("interval_min") == AP.INTERVAL_REC, _st21r.get("interval_min"))
+
+# 21d. la cola top-level es respaldo cuando el item no trae interval_min.
+_st21q = AP.default_status()
+AP.roll_day(_st21q, "2026-01-01")
+AP._publish(_st21q, {"interval_min": 30}, [],
+            {"url": "https://www.facebook.com/groups/21/posts/q/",
+             "dry": True, "state": "pendiente"}, 1_000_000_000_000)
+check("_publish cola top-level=30 (item sin interval_min) -> 30",
+      _st21q.get("interval_min") == 30, _st21q.get("interval_min"))
+
+AP.run_share = _orig_run_share21
+AP.STATUS = _orig_status21
 
 print()
 print("RESULT: " + ("PASS" if not fails else "FAIL " + ",".join(fails)))
