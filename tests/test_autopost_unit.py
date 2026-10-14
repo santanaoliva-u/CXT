@@ -68,6 +68,26 @@ check("interval_ms(MAX) dentro de +-30 % del maximo",
       all(int(AP.INTERVAL_MAX * 60000 * 0.70) <= v <= int(AP.INTERVAL_MAX * 60000 * 1.30) for v in iv),
       (min(iv), max(iv)))
 
+# 3b. el retardo EFECTIVO nunca abandona la banda dura [MIN, MAX] (IS5):
+#     el clamp va DESPUES del jitter, asi interval_ms(MAX) no supera MAX ni
+#     interval_ms(MIN) baja de MIN, y un valor medio (15) conserva el +-30 %.
+import random as _random
+_hard_lo = int(AP.INTERVAL_MIN * 60000)
+_hard_hi = int(AP.INTERVAL_MAX * 60000)
+_rng = _random.Random(20260101)
+_v60 = [AP.interval_ms(60, _rng) for _ in range(2000)]
+check("interval_ms(60) nunca supera INTERVAL_MAX*60000",
+      all(v <= _hard_hi for v in _v60), (min(_v60), max(_v60)))
+_v10 = [AP.interval_ms(10, _rng) for _ in range(2000)]
+check("interval_ms(10) nunca baja de INTERVAL_MIN*60000",
+      all(v >= _hard_lo for v in _v10), (min(_v10), max(_v10)))
+_v15 = [AP.interval_ms(15, _rng) for _ in range(2000)]
+check("interval_ms(15) en banda [MIN, MAX] y con jitter +-30 %",
+      all(_hard_lo <= v <= _hard_hi for v in _v15)
+      and all(int(AP.INTERVAL_REC * 60000 * 0.70) <= v <= int(AP.INTERVAL_REC * 60000 * 1.30)
+              for v in _v15)
+      and len(set(_v15)) > 5, (min(_v15), max(_v15)))
+
 # 4. primera publicacion solo tras REC ----------------------------------
 now = 1_000_000_000_000
 check("first_next_at = now + REC", AP.first_next_at(now) - now == int(AP.INTERVAL_REC * 60000),

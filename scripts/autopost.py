@@ -81,7 +81,16 @@ def jitter_ms(base_ms, rng=None):
 
 
 def interval_ms(mins, rng=None):
-    return jitter_ms(clamp_interval(mins) * 60000, rng)
+    """Retardo efectivo en ms con la banda dura respetada SIEMPRE (IS5).
+
+    El jitter (+-30 %) se aplica PRIMERO, sobre el intervalo clampado; despues
+    se recorta el resultado FINAL a [MIN*60000, MAX*60000]. Asi un valor en banda
+    (p. ej. 15 -> ~[10.5, 19.5] min) conserva su jitter, pero un valor en el
+    borde nunca sale de la banda: interval_ms(60) <= MAX y interval_ms(10) >= MIN.
+    """
+    lo = int(INTERVAL_MIN * 60000)
+    hi = int(INTERVAL_MAX * 60000)
+    return max(lo, min(hi, jitter_ms(clamp_interval(mins) * 60000, rng)))
 
 
 def first_next_at(now_ms):
