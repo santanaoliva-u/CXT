@@ -39,6 +39,19 @@ def get(path):
         return r.status, json.loads(r.read().decode("utf-8"))
 
 
+def post(path, body):
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(BASE + path, data=data, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return r.status, json.loads(r.read().decode("utf-8"))
+
+
+def read_queue(tmp):
+    with open(os.path.join(tmp, "autoqueue.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
 def main():
     if not (os.path.exists(CXT_BIN) and os.path.exists(CXT)):
         print("faltan binarios; corre ./build.sh")
@@ -90,6 +103,46 @@ def main():
         out = subprocess.run([CXT, "selftest"], capture_output=True, text=True,
                              env=dict(os.environ, CXT_SERVER=BASE, CXT_TOKEN=""), timeout=20)
         check("cli `cxt selftest`", out.returncode == 0 and '"ok"' in out.stdout, out.stderr or out.stdout)
+
+        # --- /autopost: los defaults de nivel superior deben fundirse en cada item ---
+        # Pausamos la cola ANTES de encolar: aunque los items sean dry, deja al
+        # worker residente (aislado, sin navegador) sin poder procesar nada.
+        post("/autopost", {"action": "pause", "value": True})
+        post("/autopost", {"action": "clear"})
+        st, r = post("/autopost", {
+            "items": [{"url": "https://www.facebook.com/groups/QA_TEST/permalink/1/",
+                       "expect": "qa"}],
+            "filter": "playa",
+            "limit": 1,
+            "text": "",
+            "dry": True,
+            "interval_min": 15,
+        })
+        check("POST /autopost encola item y responde ok/added",
+              st == 200 and r.get("ok") is True and r.get("added") == 1, r)
+        q = read_queue(tmp)
+        it = (q.get("items") or [{}])[0]
+        check("autoqueue item hereda dry=true del top-level", it.get("dry") is True, it)
+        check("autoqueue item hereda filter=playa", it.get("filter") == "playa", it)
+        check("autoqueue item conserva url/expect",
+              str(it.get("url", "")).endswith("/permalink/1/") and it.get("expect") == "qa", it)
+
+        # Caso negativo: un dry=false explicito por-item DEBE ganar al top-level true.
+        post("/autopost", {"action": "clear"})
+        st, r = post("/autopost", {
+            "items": [{"url": "https://www.facebook.com/groups/QA_TEST/permalink/2/",
+                       "expect": "qa", "dry": False}],
+            "dry": True,
+            "filter": "playa",
+        })
+        check("POST /autopost encola item explicito", st == 200 and r.get("added") == 1, r)
+        it2 = (read_queue(tmp).get("items") or [{}])[0]
+        check("item dry=false explicito gana al top-level dry=true", it2.get("dry") is False, it2)
+        check("item explicito igual hereda filter=playa", it2.get("filter") == "playa", it2)
+
+        # Limpieza: cola vacia y despausada para no dejar estado tras el test.
+        post("/autopost", {"action": "clear"})
+        post("/autopost", {"action": "pause", "value": False})
     finally:
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)

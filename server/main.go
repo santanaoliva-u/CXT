@@ -539,6 +539,40 @@ func writeAutoQueue(q autoQueue) error {
 	return writeFileAtomic(autoQueuePath(), b)
 }
 
+// autopostDefaultKeys son los campos de nivel superior del POST /autopost que
+// deben heredarse en cada item que no los defina. El valor explicito del item
+// SIEMPRE gana (p. ej. un item con dry:false debe seguir siendo real aunque el
+// usuario mande dry:true como default global).
+var autopostDefaultKeys = []string{"dry", "filter", "limit", "text", "interval_min"}
+
+// mergeAutopostDefaults funde los defaults de nivel superior en cada item-mapa
+// que aun no los defina. Sin esto un item sin `dry` quedaria sin la clave en
+// disco y el worker leeria dry ausente -> False: publicaria de VERDAD aunque la
+// casilla "Simulacion" estuviera marcada.
+func mergeAutopostDefaults(list []any, st map[string]any) []any {
+	defaults := map[string]any{}
+	for _, k := range autopostDefaultKeys {
+		if v, ok := st[k]; ok {
+			defaults[k] = v
+		}
+	}
+	if len(defaults) == 0 {
+		return list
+	}
+	for _, it := range list {
+		m, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		for k, v := range defaults {
+			if _, exists := m[k]; !exists {
+				m[k] = v
+			}
+		}
+	}
+	return list
+}
+
 // appendAutoQueue agrega items al final de la cola y devuelve cuantos sumo.
 func appendAutoQueue(items []any) (int, error) {
 	q := readAutoQueue()
@@ -673,6 +707,9 @@ func (s *server) handleAutopostSet(w http.ResponseWriter, r *http.Request) {
 		badJSON()
 		return
 	}
+	// Los defaults de nivel superior se funden en cada item que no los defina
+	// (un valor explicito por-item gana). Ver mergeAutopostDefaults.
+	list = mergeAutopostDefaults(list, st)
 	s.queueMu.Lock()
 	added, err := appendAutoQueue(list)
 	s.queueMu.Unlock()
