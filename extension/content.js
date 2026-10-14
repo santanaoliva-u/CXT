@@ -62,6 +62,14 @@ if (!window.__cxtAuto) {
       return true;
     }
 
+    // Un comentario/respuesta de FB también es div[role=article] y su timestamp es un
+    // link al permalink (con comment_id). Su aria-label propio lo delata.
+    function looksLikeComment(el) {
+      var lbl = "";
+      try { lbl = ((el.getAttribute && el.getAttribute("aria-label")) || "").trim(); } catch (e) {}
+      return /^(comentario|comment|respuesta|reply)\b/i.test(lbl);
+    }
+
     // --- extracción por publicación ---
     function findShareControl(container) {
       var cands = container.querySelectorAll("[aria-label]");
@@ -79,6 +87,9 @@ if (!window.__cxtAuto) {
       for (var i = 0; i < anchors.length; i++) {
         var href = anchors[i].getAttribute("href") || "";
         if (!PERMALINK_RE.test(href)) continue;
+        // El timestamp de un COMENTARIO apunta al permalink del post pero con
+        // comment_id/reply_comment_id: no es link propio del comentario.
+        if (/[?&](comment_id|reply_comment_id)=/.test(href)) continue;
         try {
           var u = new URL(href, location.origin);
           for (var k = 0; k < TRACK_PARAMS.length; k++) u.searchParams.delete(TRACK_PARAMS[k]);
@@ -114,6 +125,8 @@ if (!window.__cxtAuto) {
 
     function buildControlHost() {
       var host = document.createElement("span");
+      // Marcador visible para probes F3 (el probe cuenta [data-cxt-auto-ui=control]).
+      host.setAttribute("data-cxt-auto-ui", "control");
       host.style.cssText = "display:inline-flex;align-items:center;vertical-align:middle;margin-left:8px;";
       var sr = host.attachShadow({ mode: "open" });
       sr.innerHTML = "<style>" + CONTROL_CSS + "</style>" +
@@ -190,7 +203,8 @@ if (!window.__cxtAuto) {
     // antes se partía del role=article, ahora se parte del control de compartir).
     // 1) el role=article más cercano si no es esqueleto
     // 2) si no, sube por los ancestros hasta el más bajo que tenga enlace propio o altura de
-    //    tarjeta; nunca body/html, máximo 8 niveles, y se corta al salir de la publicación
+    //    tarjeta; nunca body/html, máximo 14 niveles (la tarjeta del post en la vista de
+    //    permalink queda más profunda que en el feed), y se corta al salir de la publicación
     //    (más de un control de compartir en el nodo = ya se pasó).
     function containerFor(el) {
       if (!el || el.nodeType !== 1) return null;
@@ -199,7 +213,7 @@ if (!window.__cxtAuto) {
       if (art && !isSkeleton(art)) return art;
 
       var node = el.parentElement, fb = null;
-      for (var up = 0; node && up < 8; up++) {
+      for (var up = 0; node && up < 14; up++) {
         if (node.nodeType !== 1) break;
         if (node === document.body || node === document.documentElement) break;
         if (countShareControls(node) > 1) break;
@@ -246,11 +260,10 @@ if (!window.__cxtAuto) {
       }
 
       try {
-        if (!injectControl(container)) {
-          var txt = "";
-          try { txt = norm(container.innerText || ""); } catch (e) {}
-          if (txt.length > 60 || extractPermalink(container)) skipped.add(container);
-        }
+        // No cacheamos el descarte automático: FB puede renderizar el control de compartir
+        // o el permalink DESPUÉS (tarjeta con texto pero sin share visible todavía). Solo
+        // se cachea vía skipped.add explícito (comentarios, en scan()).
+        injectControl(container);
       } catch (e) { stats.errors++; }
     }
 
@@ -292,6 +305,7 @@ if (!window.__cxtAuto) {
           if (seen.has(arts[i])) continue;
           seen.add(arts[i]);
           if (isSkeleton(arts[i])) continue;
+          if (looksLikeComment(arts[i])) { skipped.add(arts[i]); continue; }
           ensureControl(arts[i]);
         }
 
@@ -306,6 +320,7 @@ if (!window.__cxtAuto) {
           var box = containerFor(s);
           if (!box || seen.has(box)) continue;
           seen.add(box);
+          if (looksLikeComment(box)) { skipped.add(box); continue; }
           ensureControl(box);
         }
       }
