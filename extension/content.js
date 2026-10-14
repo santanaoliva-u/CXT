@@ -9,8 +9,13 @@ if (!window.__cxtAuto) {
 
     // Misma constante que share_post.py:85-88 (regex del permalink de una publicación de FB).
     var PERMALINK_RE = /\/posts\/|\/permalink|\/share\/p\/|\/photo|\/videos\//;
-    // Etiquetas nativas: control Compartir (share_post.py:61) y menú nativo (share_post.py:112-122).
-    var SHARE_LABEL_RE = /^(share|compartir)$/i;
+    // Control Compartir. Facebook no siempre usa el texto corto: en el build medido el
+    // aria-label real era "Share, send this to friends or post it on your profile."
+    // (el equivalente español viene largo igual). Por eso se casa por PREFIJO con límite
+    // de palabra, y no por igualdad exacta.
+    var SHARE_LABEL_RE = /^(share|compartir|comparte|share this|comparte esto)\b/i;
+    // Etiquetas del menú nativo (share_post.py:112-122). NO son el control de compartir
+    // aunque empiecen igual: se descartan a mano en isShareLabel().
     var MENU_LABELS = ["compartir en un grupo", "share to a group", "compartir ahora", "share now"];
     var TRACK_PARAMS = ["__cft__", "__tn__", "comment_id", "reply_comment_id"];
 
@@ -49,13 +54,20 @@ if (!window.__cxtAuto) {
       });
     }
 
+    function isShareLabel(a) {
+      var t = (a || "").trim();
+      if (!SHARE_LABEL_RE.test(t)) return false;
+      if (MENU_LABELS.indexOf(norm(t)) >= 0) return false;
+      if (/^(share|compartir)\s+(settings|options|permissions|ajustes|opciones|preferencias)\b/i.test(t)) return false;
+      return true;
+    }
+
     // --- extracción por publicación ---
     function findShareControl(container) {
       var cands = container.querySelectorAll("[aria-label]");
       for (var i = 0; i < cands.length; i++) {
         var el = cands[i];
-        var a = (el.getAttribute("aria-label") || "").trim();
-        if (SHARE_LABEL_RE.test(a) && visible(el)) {
+        if (isShareLabel(el.getAttribute("aria-label") || "") && visible(el)) {
           return el.closest("div[role=button],a[role=button],button") || el;
         }
       }
@@ -140,6 +152,66 @@ if (!window.__cxtAuto) {
       }
     }
 
+    // ¿Es un esqueleto de carga de FB? Se reconoce porque el texto casi vacío y trae el
+    // indicador nativo de carga (data-visualcompletion=loading-state / role=status) y, a
+    // diferencia de una publicación real, no trae su control de compartir.
+    function isSkeleton(el) {
+      if (!el || el.nodeType !== 1) return false;
+      var t = "";
+      try { t = (el.innerText || "").replace(/\s+/g, " ").trim().toLowerCase(); } catch (e) {}
+      if (t.length > 60) return false;
+      if (countShareControls(el) > 0) return false;
+      try {
+        if (el.querySelector('[data-visualcompletion="loading-state"],[role="status"][aria-label]')) return true;
+      } catch (e) {}
+      var lbl = (el.getAttribute("aria-label") || "").toLowerCase();
+      return lbl === "cargando..." || lbl === "loading...";
+    }
+
+    // Cuenta los controles nativos de compartir; corta en 2 (solo interesa si hay >1).
+    function countShareControls(root) {
+      var n = 0;
+      try {
+        var els = root.querySelectorAll("[aria-label]");
+        for (var i = 0; i < els.length; i++) {
+          if (isShareLabel(els[i].getAttribute("aria-label") || "")) {
+            if (++n > 1) break;
+          }
+        }
+      } catch (e) {}
+      return n;
+    }
+
+    function heightOf(node) {
+      try { return node.getBoundingClientRect().height || node.offsetHeight || 0; } catch (e) { return 0; }
+    }
+
+    // Contenedor de la publicación dueña de `el` (camino inverso al de la versión anterior:
+    // antes se partía del role=article, ahora se parte del control de compartir).
+    // 1) el role=article más cercano si no es esqueleto
+    // 2) si no, sube por los ancestros hasta el más bajo que tenga enlace propio o altura de
+    //    tarjeta; nunca body/html, máximo 8 niveles, y se corta al salir de la publicación
+    //    (más de un control de compartir en el nodo = ya se pasó).
+    function containerFor(el) {
+      if (!el || el.nodeType !== 1) return null;
+      var art = null;
+      try { art = el.closest("div[role=article]"); } catch (e) {}
+      if (art && !isSkeleton(art)) return art;
+
+      var node = el.parentElement, fb = null;
+      for (var up = 0; node && up < 8; up++) {
+        if (node.nodeType !== 1) break;
+        if (node === document.body || node === document.documentElement) break;
+        if (countShareControls(node) > 1) break;
+        if (!isSkeleton(node)) {
+          if (extractPermalink(node)) return node;
+          if (!fb && heightOf(node) >= 150) fb = node;
+        }
+        node = node.parentElement;
+      }
+      return fb;
+    }
+
     function injectControl(container) {
       var shareEl = findShareControl(container);
       var permalink = extractPermalink(container);
@@ -174,7 +246,11 @@ if (!window.__cxtAuto) {
       }
 
       try {
-        if (!injectControl(container)) skipped.add(container);
+        if (!injectControl(container)) {
+          var txt = "";
+          try { txt = norm(container.innerText || ""); } catch (e) {}
+          if (txt.length > 60 || extractPermalink(container)) skipped.add(container);
+        }
       } catch (e) { stats.errors++; }
     }
 
@@ -209,12 +285,28 @@ if (!window.__cxtAuto) {
       var roots = [document].concat(Array.prototype.slice.call(shadowRoots));
       var seen = new Set();
       for (var r = 0; r < roots.length; r++) {
+        var root = roots[r];
         var arts;
-        try { arts = roots[r].querySelectorAll("div[role=article]"); } catch (e) { continue; }
+        try { arts = root.querySelectorAll("div[role=article]"); } catch (e) { arts = []; }
         for (var i = 0; i < arts.length; i++) {
           if (seen.has(arts[i])) continue;
           seen.add(arts[i]);
+          if (isSkeleton(arts[i])) continue;
           ensureControl(arts[i]);
+        }
+
+        var shares;
+        try { shares = root.querySelectorAll("[aria-label]"); } catch (e) { shares = []; }
+        var left = 400;
+        for (var j = 0; j < shares.length && left > 0; j++) {
+          var s = shares[j];
+          if (!isShareLabel(s.getAttribute("aria-label") || "")) continue;
+          if (!visible(s)) continue;
+          left--;
+          var box = containerFor(s);
+          if (!box || seen.has(box)) continue;
+          seen.add(box);
+          ensureControl(box);
         }
       }
       publishStats();
