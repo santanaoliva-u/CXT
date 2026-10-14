@@ -97,6 +97,36 @@ El estado también se refleja en el badge y en `/health` (`enabled`).
 - **Comentar**: comenta en una publicación (por URL o la más reciente) en modo fijo o
   automático (cada X minutos, N veces).
 - **Grupos**: vuelve a escanear tus grupos y muestra cuántos hay por categoría.
+- **Automatización**: estado de la cola de publicaciones programadas (pendientes, actual,
+  hechas, próximo); botones **Pausar / Reanudar** y **Limpiar**.
+
+## Automatizar publicaciones (cola)
+
+En Facebook, cada publicación de tu perfil muestra una casilla de selección y un botón
+**Automatizar**; el botón abre el diálogo **Automatizar publicación**:
+
+| Campo | Qué es |
+|---|---|
+| **Grupos (texto)** | filtro de nombre de grupo (p. ej. `playa del carmen`) |
+| **Límite** | grupos por publicación |
+| **Texto extra (opcional)** | texto que acompaña cada compartición |
+| **Intervalo (min)** | minutos entre publicaciones: recomendado **15**, máximo **60** |
+| **Simulación** | marcada por defecto: prueba sin publicar nada |
+
+Al pulsar **Encolar**, el trabajo queda en `autoqueue.json` (en `CXT_DIR`, p. ej.
+`~/.cxt/autoqueue.json`) y el worker residente `autopost.py` lo consume cuando le toca,
+aunque cierres el popup. La pestaña **Automatización** del popup muestra la cola y permite
+pausarla, reanudarla o vaciarla.
+
+**Límites anti-ban (automáticos):** máximo **10 grupos por publicación** y **20 publicaciones
+por día**; el worker recorta cualquier límite mayor. Compartir en grupos de forma
+automatizada puede limitar tu cuenta.
+
+Estado de la cola:
+
+```bash
+curl -s 127.0.0.1:8799/autopost
+```
 
 ## Scripts opcionales (ejemplos para redes)
 
@@ -133,7 +163,8 @@ python3 scripts/comment.py --delete "texto a buscar"                 # borra un 
 ```
 
 Cada panel del popup hace lo mismo a través del daemon:
-`/schedule` (auto-publicar), `/sharegroups`, `/sharepost`, `/comment` y `/groupscan`.
+`/schedule` (auto-publicar), `/sharegroups`, `/sharepost`, `/comment`, `/groupscan` y
+`/autopost` (cola de automatización).
 
 ## Auto-verificación
 

@@ -63,6 +63,7 @@
   <button data-tab="publicar">Publicar<span class="badge" id="b_pub"></span></button>
   <button data-tab="compartir">Compartir<span class="badge" id="b_share"></span></button>
   <button data-tab="comentar">Comentar<span class="badge" id="b_com"></span></button>
+  <button data-tab="auto">Automatización<span class="badge" id="b_auto"></span></button>
   <button data-tab="ajustes">Ajustes<span class="badge" id="b_grp"></span></button>
 </nav>
 <main>
@@ -159,6 +160,16 @@
       <div id="cstatus" class="status"></div>
       <ul id="cresults" class="res"></ul>
       <details class="log"><summary>Ver proceso en vivo</summary><pre class="console" id="log_com">(sin datos)</pre></details>
+    </div>
+  </section>
+
+  <section id="t_auto">
+    <div class="card">
+      <h2>Automatización</h2>
+      <p class="hint">Cola de publicaciones programadas: se comparten solas en los grupos cuando les toca.</p>
+      <div id="astatus" class="status">cargando…</div>
+      <div class="btnrow"><button id="apause" class="btn">PAUSAR</button><button id="aclear" class="btn sec">LIMPIAR</button></div>
+      <details class="log"><summary>Ver proceso en vivo</summary><pre class="console" id="log_auto">(sin datos)</pre></details>
     </div>
   </section>
 

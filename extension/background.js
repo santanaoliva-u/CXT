@@ -5,6 +5,7 @@ let runningSince = 0;
 let lastStore = 0;
 let pollCtl = null;
 let currentLoop = null;
+let autoStatsCache = null;
 
 const processedIds = new Set();
 const PROCESSED_MAX = 100;
@@ -34,6 +35,16 @@ async function post(server, path, token, obj) {
     body: JSON.stringify(obj),
   });
   return res.ok;
+}
+
+async function daemonJson(server, path, token, body) {
+  const url = server + path + (token ? "?token=" + encodeURIComponent(token) : "");
+  const opts =
+    body === undefined
+      ? { cache: "no-store" }
+      : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const res = await withTimeout(fetch(url, opts), 15000, path);
+  return await res.json();
 }
 
 let dlgHooked = false;
@@ -946,6 +957,12 @@ async function applyBadge(on) {
 }
 
 async function init() {
+  try {
+    const s = await chrome.storage.local.get("autoStats");
+    if (s && s.autoStats) autoStatsCache = s.autoStats;
+  } catch (e) {
+    console.error(e);
+  }
   const c = await cfg();
   await applyBadge(c.enabled);
   await reportState(c);
@@ -984,6 +1001,8 @@ const API = {
   shareSet: { path: "/sharegroups", method: "POST" },
   sharePostGet: { path: "/sharepost" },
   sharePostSet: { path: "/sharepost", method: "POST" },
+  autopostGet: { path: "/autopost" },
+  autopostSet: { path: "/autopost", method: "POST" },
   commentGet: { path: "/comment" },
   commentSet: { path: "/comment", method: "POST" },
   groupscanGet: { path: "/groupscan" },
@@ -994,7 +1013,7 @@ chrome.runtime.onMessage.addListener((msg, _s, send) => {
   if (!msg || !msg.type) return;
   if (msg.type === "status") {
     cfg()
-      .then((c) => send({ running, enabled: c.enabled, server: c.server, hasToken: !!c.token }))
+      .then((c) => send({ running, enabled: c.enabled, server: c.server, hasToken: !!c.token, dom: autoStatsCache }))
       .catch((e) => send({ running, error: String(e) }));
     return true;
   }
@@ -1031,6 +1050,38 @@ chrome.runtime.onMessage.addListener((msg, _s, send) => {
         send({ ok: false, error: String(e) });
       }
     })();
+    return true;
+  }
+  if (msg.type === "autoQueue") {
+    (async () => {
+      try {
+        const c = await cfg();
+        send(await daemonJson(c.server, "/autopost", c.token, msg.value || {}));
+      } catch (e) {
+        send({ ok: false, error: "daemon no disponible" });
+      }
+    })();
+    return true;
+  }
+  if (msg.type === "autopostState") {
+    (async () => {
+      try {
+        const c = await cfg();
+        send(await daemonJson(c.server, "/autopost", c.token));
+      } catch (e) {
+        send({ ok: false });
+      }
+    })();
+    return true;
+  }
+  if (msg.type === "autoStats") {
+    try {
+      const v = msg.value && typeof msg.value === "object" ? msg.value : {};
+      autoStatsCache = { tagged: +v.tagged || 0, injected: +v.injected || 0, errors: +v.errors || 0 };
+      const p = chrome.storage.local.set({ autoStats: autoStatsCache });
+      if (p && p.catch) p.catch(() => {});
+    } catch (e) {}
+    send({ ok: true });
     return true;
   }
   const ep = API[msg.type];

@@ -3,12 +3,13 @@ const FIELDS = ["server", "token", "sint", "scount", "stopic", "stext",
   "purl", "pexpect", "pfilter", "plimit", "ptext", "pdry",
   "gfilter", "glimit", "gtext", "gdry",
   "curl", "cmode", "ctext", "cint", "ccount", "cdry"];
-const JOB = { pub: "scheduler", sharepost: "sharepost", share: "share", com: "comment", grp: "groupscan" };
+const JOB = { pub: "scheduler", sharepost: "sharepost", share: "share", com: "comment", grp: "groupscan", auto: "autopost" };
 
 let tab = "estado";
 let mode = "post";
 let form = {};
 let busy = false;
+let autoMsg = "";
 
 function send(type, value, query) {
   return new Promise((res) => {
@@ -101,6 +102,14 @@ function fmtTime(ms) {
   try { return new Date(ms).toLocaleTimeString(); } catch (e) { return ""; }
 }
 
+function fmtEta(ms) {
+  if (!ms) return "—";
+  const s = Math.round((ms - Date.now()) / 1000);
+  if (s <= 0) return "ahora";
+  const m = Math.floor(s / 60);
+  return m ? m + " min " + (s % 60) + " s" : s + " s";
+}
+
 function renderHeader(h) {
   if (!h || (h.ok === false && h.error)) {
     $("conn").textContent = "sin conexión";
@@ -133,6 +142,8 @@ async function renderEstado() {
   if (b && b.total) lines.push("Grupos: " + (b.published || 0) + "/" + b.total + (b.running ? " (en curso)" : ""));
   if (c && c.total) lines.push("Compartir post: " + (c.published || 0) + "/" + c.total + (c.running ? " (en curso)" : ""));
   if (d && d.total) lines.push("Comentar: " + (d.posted || 0) + "/" + d.total + (d.running ? " (en curso)" : ""));
+  const e = await send("autopostState");
+  if (e && e.ok !== false && (+e.pending || 0) > 0) lines.push("Automatización: " + e.pending + " pendientes" + (e.pausado ? " (en pausa)" : ""));
   $("acts").textContent = lines.length ? lines.join("\n") : "sin actividad";
 }
 
@@ -176,6 +187,30 @@ async function renderComment() {
   await setLog(JOB.com, "log_com", !!s.running);
 }
 
+async function renderAuto() {
+  const s = await send("autopostState");
+  if (!s || s.ok === false) {
+    $("astatus").textContent = "sin conexión con el daemon";
+    setBadge("b_auto", false);
+    return;
+  }
+  const on = !!(s.running || s.alive);
+  const paused = !!s.pausado;
+  const pending = +s.pending || 0;
+  $("apause").textContent = paused ? "REANUDAR" : "PAUSAR";
+  const lines = [
+    "Estado: " + (!on ? "APAGADA (worker parado)" : paused ? "ACTIVADA · en pausa" : "ACTIVADA"),
+    "Pendientes: " + pending,
+    "Actual: " + (s.current || "—"),
+    "Hechas: " + (+s.done || 0),
+    "Próximo: " + (!on || paused || !s.next_at ? "—" : fmtEta(s.next_at))
+  ];
+  if (autoMsg) { lines.push(autoMsg); autoMsg = ""; }
+  $("astatus").textContent = lines.join("\n");
+  setBadge("b_auto", pending > 0, pending > 0 ? String(pending) : "");
+  await setLog(JOB.auto, "log_auto", on && !paused);
+}
+
 async function renderGroups() {
   const g = await send("groupscanGet");
   $("grstatus").textContent = g.count ? (g.count + " grupos · " + (g.scanned_at || "")) : "sin escanear";
@@ -193,6 +228,7 @@ async function tick() {
     else if (tab === "publicar") await renderPub();
     else if (tab === "compartir") { if (mode === "post") await renderSharePost(); else await renderShare(); }
     else if (tab === "comentar") await renderComment();
+    else if (tab === "auto") await renderAuto();
     else if (tab === "ajustes") await renderGroups();
   } finally {
     busy = false;
@@ -286,6 +322,22 @@ function wire() {
     tick();
   });
   $("cstop").addEventListener("click", async () => { await send("commentSet", { stop: true }); tick(); });
+
+  $("apause").addEventListener("click", async () => {
+    const s = await send("autopostState");
+    if (!s || s.ok === false) { autoMsg = "✗ sin conexión"; tick(); return; }
+    const value = !s.pausado;
+    const r = await send("autopostSet", {action:"pause", value});
+    autoMsg = r && (r.ok === false || r.error) ? "✗ " + (r.error || "no se pudo") : (value ? "✓ pausada" : "✓ reanudada");
+    tick();
+  });
+
+  $("aclear").addEventListener("click", async () => {
+    if (!confirm("¿Vaciar la cola de automatización?")) return;
+    const r = await send("autopostSet", {action:"clear"});
+    autoMsg = r && (r.ok === false || r.error) ? "✗ " + (r.error || "no se pudo") : "✓ cola vaciada";
+    tick();
+  });
 
   $("grscan").addEventListener("click", async () => { await send("groupscanSet", {}); tick(); });
 

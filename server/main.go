@@ -52,6 +52,11 @@ type server struct {
 	lastPoll time.Time
 
 	extEnabled bool
+
+	// queueMu serializa los read-modify-write de autoqueue.json: el HTTP server
+	// corre cada request en su goroutine, asi que sin exclusion los POST
+	// concurrentes a /autopost perderian items (lost update).
+	queueMu sync.Mutex
 }
 
 func newServer(token string) *server {
@@ -145,6 +150,7 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"share_post_alive": sharePostAlive(),
 		"comment_alive":    commentAlive(),
 		"groupscan_alive":  groupsScanAlive(),
+		"autopost_alive":   autopostAlive(),
 		"scripts_ok":       allScriptsOK(),
 	})
 }
@@ -405,12 +411,17 @@ var (
 			}
 		},
 	}
+	autopostSpec = jobSpec{
+		label: "automatizacion", script: "autopost.py", status: "autopost_status.json",
+		cmd: "autopost.cmd.json", pid: "autopost.pid", log: "/tmp/cxt_autopost.log",
+	}
 )
 
 func sharerAlive() bool     { return shareSpec.alive() }
 func sharePostAlive() bool  { return sharePostSpec.alive() }
 func commentAlive() bool    { return commentSpec.alive() }
 func groupsScanAlive() bool { return groupsScanSpec.alive() }
+func autopostAlive() bool   { return autopostSpec.alive() }
 
 func (s *server) handleShareGet(w http.ResponseWriter, r *http.Request) {
 	if !s.auth(w, r) {
@@ -468,6 +479,214 @@ func (s *server) handleGroupScanSet(w http.ResponseWriter, r *http.Request) {
 	groupsScanSpec.set(w, r)
 }
 
+// ---- autopost (cola de automatizacion) ----
+//
+// autoqueue.json: {"paused":bool,"items":[{url,expect,text,filter,limit,dry,...}]}
+// El daemon SOLO escribe la cola (append/cancel/clear/pause) con un
+// read-modify-write atomico (temp+rename) y NUNCA la consume: el worker
+// residente (autopost.py) es el UNICO lector, asi la cola sobrevive a reinicios.
+
+func autoQueuePath() string { return filepath.Join(cxtDir(), "autoqueue.json") }
+
+type autoQueue struct {
+	Paused bool  `json:"paused"`
+	Items  []any `json:"items"`
+}
+
+// writeFileAtomic escribe b en path de forma atomica (temp en el mismo dir +
+// os.Rename), para que el worker nunca lea un archivo a medias.
+func writeFileAtomic(path string, b []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".cxt-autopost-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	return os.Rename(name, path)
+}
+
+func readAutoQueue() autoQueue {
+	q := autoQueue{Items: []any{}}
+	b, err := os.ReadFile(autoQueuePath())
+	if err != nil {
+		return q
+	}
+	_ = json.Unmarshal(b, &q)
+	if q.Items == nil {
+		q.Items = []any{}
+	}
+	return q
+}
+
+func writeAutoQueue(q autoQueue) error {
+	if q.Items == nil {
+		q.Items = []any{}
+	}
+	b, err := json.Marshal(q)
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(autoQueuePath(), b)
+}
+
+// appendAutoQueue agrega items al final de la cola y devuelve cuantos sumo.
+func appendAutoQueue(items []any) (int, error) {
+	q := readAutoQueue()
+	q.Items = append(q.Items, items...)
+	if err := writeAutoQueue(q); err != nil {
+		return 0, err
+	}
+	return len(items), nil
+}
+
+// autoPendingState: un item esta pendiente si no trae estado o es "pendiente".
+func autoPendingState(m map[string]any) bool {
+	s, _ := m["state"].(string)
+	return s == "" || s == "pendiente"
+}
+
+// cancelAutoQueue elimina EXACTAMENTE un item pendiente con ese url.
+func cancelAutoQueue(url string) (int, error) {
+	q := readAutoQueue()
+	out := make([]any, 0, len(q.Items))
+	removed := 0
+	for _, it := range q.Items {
+		if removed == 0 && url != "" {
+			if m, ok := it.(map[string]any); ok {
+				if u, _ := m["url"].(string); u == url && autoPendingState(m) {
+					removed++
+					continue
+				}
+			}
+		}
+		out = append(out, it)
+	}
+	q.Items = out
+	if err := writeAutoQueue(q); err != nil {
+		return 0, err
+	}
+	return removed, nil
+}
+
+func ensureAutopost() {
+	if autopostAlive() {
+		return
+	}
+	script := filepath.Join(cxtDir(), "autopost.py")
+	if _, err := os.Stat(script); err != nil {
+		return
+	}
+	cmdPath := filepath.Join(cxtDir(), autopostSpec.cmd)
+	if _, err := startDetached(script, autopostSpec.log, "--cmd", cmdPath); err != nil {
+		log.Printf("no se pudo arrancar autopost: %v", err)
+	}
+}
+
+func (s *server) handleAutopostGet(w http.ResponseWriter, r *http.Request) {
+	if !s.auth(w, r) {
+		return
+	}
+	autopostSpec.get(w)
+}
+
+// handleAutopostSet implementa la semantica de COLA del POST /autopost. NO usa
+// jobSpec.set (ese arranca un job por comando); aqui el daemon manipula la cola
+// persistente y garantiza que el worker residente este vivo.
+func (s *server) handleAutopostSet(w http.ResponseWriter, r *http.Request) {
+	if !s.auth(w, r) {
+		return
+	}
+	badJSON := func() { writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad json"}) }
+	var st map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&st); err != nil {
+		badJSON()
+		return
+	}
+	if st == nil {
+		st = map[string]any{}
+	}
+	// stop tiene prioridad (mismo contrato que los demas jobs).
+	if b, ok := st["stop"].(bool); ok && b {
+		stopJob(autopostSpec.pid, autopostSpec.script)
+		writeJSON(w, 200, map[string]any{"ok": true, "stopped": true})
+		return
+	}
+	if action, _ := st["action"].(string); action != "" {
+		switch action {
+		case "clear":
+			s.queueMu.Lock()
+			q := readAutoQueue()
+			q.Items = []any{}
+			err := writeAutoQueue(q)
+			s.queueMu.Unlock()
+			if err != nil {
+				http.Error(w, "no se pudo escribir", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, 200, map[string]any{"ok": true})
+		case "cancel":
+			url, _ := st["url"].(string)
+			s.queueMu.Lock()
+			removed, err := cancelAutoQueue(url)
+			s.queueMu.Unlock()
+			if err != nil {
+				http.Error(w, "no se pudo escribir", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, 200, map[string]any{"ok": true, "removed": removed})
+		case "pause":
+			value, _ := st["value"].(bool)
+			s.queueMu.Lock()
+			q := readAutoQueue()
+			q.Paused = value
+			err := writeAutoQueue(q)
+			s.queueMu.Unlock()
+			if err != nil {
+				http.Error(w, "no se pudo escribir", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, 200, map[string]any{"ok": true, "paused": value})
+		default:
+			badJSON()
+		}
+		return
+	}
+	// Encolar: append de items a autoqueue.json.
+	raw, present := st["items"]
+	if !present {
+		badJSON()
+		return
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		// items presente pero NO es una lista: 400 y el archivo queda intacto.
+		badJSON()
+		return
+	}
+	s.queueMu.Lock()
+	added, err := appendAutoQueue(list)
+	s.queueMu.Unlock()
+	if err != nil {
+		http.Error(w, "no se pudo escribir", http.StatusInternalServerError)
+		return
+	}
+	ensureAutopost()
+	started := autopostAlive()
+	resp := map[string]any{"ok": true, "added": added, "worker_started": started}
+	if !started {
+		resp["warning"] = "worker no arrancó (revisa autopost.py/scripts_ok)"
+	}
+	writeJSON(w, 200, resp)
+}
+
 // ---- diagnostics ----
 
 func loadGroupsJSON() (map[string]any, bool) {
@@ -501,7 +720,7 @@ func (s *server) handleSelfTest(w http.ResponseWriter, r *http.Request) {
 		"groups_count": gc, "enabled": enabled, "extension_online": online,
 		"jobs": map[string]bool{
 			"scheduler": schedulerAlive(), "share": sharerAlive(), "share_post": sharePostAlive(),
-			"comment": commentAlive(), "groupscan": groupsScanAlive(),
+			"comment": commentAlive(), "groupscan": groupsScanAlive(), "autopost": autopostAlive(),
 		},
 	})
 }
@@ -733,7 +952,7 @@ func cxtDir() string {
 }
 
 var requiredScripts = []string{"scheduler.py", "groups_scan.py", "groups_share.py",
-	"share_post.py", "comment.py", "clone_publish.py", "news.sh"}
+	"share_post.py", "comment.py", "clone_publish.py", "news.sh", "autopost.py"}
 
 func scriptsStatus() map[string]bool {
 	m := map[string]bool{}
@@ -759,6 +978,7 @@ var jobLogs = map[string]string{
 	"comment":   "/tmp/cxt_comment.log",
 	"groupscan": "/tmp/cxt_groupscan.log",
 	"scheduler": "/tmp/cxt_sched.log",
+	"autopost":  "/tmp/cxt_autopost.log",
 }
 
 // handleLog devuelve las ultimas N lineas del log del trabajo.
@@ -815,6 +1035,7 @@ func main() {
 	s := newServer(token)
 	if os.Getenv("CXT_NO_SCHED") == "" {
 		ensureScheduler()
+		ensureAutopost()
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
@@ -822,6 +1043,7 @@ func main() {
 	mux.HandleFunc("/schedule", jobRoute(s.handleScheduleGet, s.handleScheduleSet))
 	mux.HandleFunc("/sharegroups", jobRoute(s.handleShareGet, s.handleShareSet))
 	mux.HandleFunc("/sharepost", jobRoute(s.handleSharePostGet, s.handleSharePostSet))
+	mux.HandleFunc("/autopost", jobRoute(s.handleAutopostGet, s.handleAutopostSet))
 	mux.HandleFunc("/comment", jobRoute(s.handleCommentGet, s.handleCommentSet))
 	mux.HandleFunc("/groupscan", jobRoute(s.handleGroupScanGet, s.handleGroupScanSet))
 	mux.HandleFunc("/selftest", s.handleSelfTest)

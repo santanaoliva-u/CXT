@@ -22,7 +22,7 @@ PORT = os.environ.get("CXT_TEST_PORT", "8796")
 BASE = "http://127.0.0.1:" + PORT
 
 SCRIPTS = ["scheduler.py", "groups_scan.py", "groups_share.py",
-           "share_post.py", "comment.py", "clone_publish.py", "news.sh"]
+           "share_post.py", "comment.py", "clone_publish.py", "news.sh", "autopost.py"]
 EXTRA = ["cxtlib.py"]
 
 fails = []
@@ -80,7 +80,7 @@ def main():
               all(s.get("scripts", {}).values()) and len(s.get("scripts", {})) == len(SCRIPTS), s.get("scripts"))
         check("selftest.groups_count", s.get("groups_count") == 3, s.get("groups_count"))
 
-        for ep in ["/schedule", "/comment", "/sharegroups", "/sharepost", "/groupscan"]:
+        for ep in ["/schedule", "/comment", "/sharegroups", "/sharepost", "/groupscan", "/autopost"]:
             try:
                 st, body = get(ep)
                 check("GET " + ep + " 200+json", st == 200 and isinstance(body, dict), body)
