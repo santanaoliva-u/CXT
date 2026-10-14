@@ -35,6 +35,27 @@ if (!window.__cxtAuto) {
       return s;
     }
 
+    // Chatarra de FB que no identifica un post (logo, chrome del visor de fotos).
+    var EXPECT_NOISE_RE = /^(facebook|meta|instagram|whatsapp|me gusta|like|comentar|comment|compartir|share|ver mas|see more|publicidad|advertisement|reels|video|fotos|photos|siguiente|anterior|siguiente foto|previous|next)$/i;
+
+    function expectFrom(container) {
+      var raw = (container && container.innerText) || "";
+      var lines = raw.split(/\n+/);
+      var picked = [];
+      var seen = {};
+      for (var i = 0; i < lines.length && picked.length < 3; i++) {
+        var line = (lines[i] || "").replace(/\s+/g, " ").trim();
+        if (line.length < 3) continue;
+        var n = norm(line);
+        if (EXPECT_NOISE_RE.test(n)) continue;
+        if (seen[n]) continue;
+        seen[n] = true;
+        picked.push(line);
+      }
+      if (!picked.length) return "";
+      return picked.join(" ").slice(0, 120);
+    }
+
     function visible(el) {
       try {
         if (el.checkVisibility) return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
@@ -231,7 +252,7 @@ if (!window.__cxtAuto) {
       var permalink = extractPermalink(container);
       if (!shareEl && !permalink) return false;
 
-      var expect = norm(container.innerText || "").slice(0, 120);
+      var expect = expectFrom(container);
       var id = "cxt" + (++seq);
       var host = buildControlHost();
       var rec = { id: id, host: host, permalink: permalink, expect: expect, hasShare: hasNativeMenu(container), container: container };

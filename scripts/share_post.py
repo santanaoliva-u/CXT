@@ -70,12 +70,22 @@ def js_find_share(expect=""):
    el=all.find(x=>box.contains(x))||null;
    scope=dlg?'dialog':'article';
  }
- if(!el){
-   if(w) return null;
-   const main=document.querySelector('[role=main]')||document.body;
-   const cands=all.filter(e=>main.contains(e)).sort((a,b)=>a.getBoundingClientRect().y-b.getBoundingClientRect().y);
-   el=cands[0]||null; scope='main';
- }
+  if(!el){
+    // Sin expect (o basura ya filtrada): el post visible de la pestaña dedicada.
+    if(!w){
+      const main=document.querySelector('[role=main]')||document.body;
+      const cands=all.filter(e=>main.contains(e)).sort((a,b)=>a.getBoundingClientRect().y-b.getBoundingClientRect().y);
+      el=cands[0]||null; scope='main';
+    } else {
+      // Permalink de foto/video sin role=article: el Share del main es el del post.
+      if(/\\/posts\\/|\\/permalink|\\/share\\/p\\/|\\/photo|\\/videos\\//.test(location.href)){
+        const main=document.querySelector('[role=main]')||document.body;
+        const cands=all.filter(e=>main.contains(e)).sort((a,b)=>a.getBoundingClientRect().y-b.getBoundingClientRect().y);
+        el=cands[0]||null; scope='main';
+      }
+      if(!el) return null;
+    }
+  }
  if(!el) return null;
  el.scrollIntoView({block:'center'});
  const r=el.getBoundingClientRect();
@@ -305,8 +315,19 @@ def goto(url):
     sleep(250)
 
 
+def is_boilerplate_expect(expect):
+    n = cxtlib.norm(expect or "")
+    if not n:
+        return True
+    words = [w for w in n.split() if w]
+    noise = {"facebook", "meta", "instagram", "whatsapp", "me", "gusta", "like",
+             "comentar", "comment", "compartir", "share", "ver", "mas", "see",
+             "more", "publicidad", "advertisement"}
+    return bool(words) and all(w in noise or w.isdigit() for w in words)
+
+
 def context_ok(expect):
-    if not expect:
+    if not expect or is_boilerplate_expect(expect):
         return True
     t = cxtlib.cdp(CXT, TAB, JS_POST_TEXT) or ""
     return cxtlib.norm(expect) in cxtlib.norm(t)
@@ -314,7 +335,9 @@ def context_ok(expect):
 
 def share_url_group(url, g, dry, text, expect=""):
     global EXPECT
-    EXPECT = expect or ""
+    # Expect basuriento (p. ej. "facebook facebook..." del visor de fotos) no
+    # debe bloquear el fallback del post visible en la pestaña dedicada.
+    EXPECT = "" if is_boilerplate_expect(expect) else (expect or "")
     if url:
         log("abro la publicacion: %s" % url)
         goto(url)
