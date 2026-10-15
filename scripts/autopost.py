@@ -60,6 +60,12 @@ ATTEMPTS_TTL_MS = int(float(os.environ.get("CXT_AUTO_ATTEMPTS_TTL_DAYS", "30")) 
 
 CHECKPOINT_PAT = ("/checkpoint", "/recover")
 
+# Query params de tracking/consentimiento de FB: NO identifican el post.
+_QS_TRACK = frozenset({
+    "ref", "ref_src", "ref_url", "mibextid", "fbclid", "gclid",
+    "__cft__", "__aaid", "__hs", "hc_location", "locale",
+})
+
 
 def log(msg):
     print(time.strftime("%Y-%m-%d %H:%M:%S"), msg, flush=True)
@@ -150,8 +156,28 @@ def group_limit(item_limit, cap=MAXGROUPS):
 
 
 def permalink_key(url):
-    u = (url or "").strip().split("#")[0].split("?")[0].rstrip("/")
-    return cxtlib.norm(u)
+    """Clave de identidad del post, tolerante a tracking de Facebook.
+
+    Antes se borraba TODO el querystring: `photo/?fbid=A` y `photo/?fbid=B`
+    colapsaban a `…/photo`, así el dedupe tiraba items distintos y la cola
+    quedaba vacía en la vista del worker. Ahora se conservan los parámetros
+    de identidad (fbid, set, id, …) y solo se pegan los de tracking
+    (`ref`, `__cft__…`, fbclid, etc.)."""
+    u = (url or "").strip().split("#")[0]
+    if "?" not in u:
+        return cxtlib.norm(u.rstrip("/"))
+    base, _, qs = u.partition("?")
+    keep = []
+    for part in qs.split("&"):
+        if not part:
+            continue
+        name = part.split("=", 1)[0].lower()
+        if name in _QS_TRACK or name.startswith("__cft") or name.startswith("mibextid"):
+            continue
+        keep.append(part)
+    if not keep:
+        return cxtlib.norm(base.rstrip("/"))
+    return cxtlib.norm(base.rstrip("/") + "?" + "&".join(keep))
 
 
 def item_key(item, dry=None):

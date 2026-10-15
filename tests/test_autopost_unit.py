@@ -131,6 +131,20 @@ check("dedupe conserva el primero",
 blank = AP.dedupe_items([{"url": ""}, {"url": ""}])
 check("dedupe no colapsa urls vacias", len(blank) == 2, len(blank))
 
+# 7b. fbid de foto: sin este fix el worker veia pending=0 (dedupe tiraba items)
+_fa = "https://www.facebook.com/photo/?fbid=1668053538331415&set=a.806895547780556&__cft__%5B0%5D=aaa"
+_fb = "https://www.facebook.com/photo/?fbid=122237246654329580&set=pcb.122237247752329580&__cft__%5B0%5D=bbb"
+_fc = "https://www.facebook.com/photo/?fbid=122237246654329580&set=pcb.122237247752329580&__cft__%5B0%5D=ccc-distinto"
+check("fotos con fbid distintos NO colapsan",
+      AP.permalink_key(_fa) != AP.permalink_key(_fb),
+      (AP.permalink_key(_fa), AP.permalink_key(_fb)))
+check("mismo fbid con __cft__ distinto SI es la misma clave",
+      AP.permalink_key(_fb) == AP.permalink_key(_fc),
+      (AP.permalink_key(_fb), AP.permalink_key(_fc)))
+ded_photos = AP.dedupe_items([{"url": _fa}, {"url": _fb}, {"url": _fc}])
+check("dedupe de 3 fotos -> 2 (solo el cft duplicado)",
+      len(ded_photos) == 2, len(ded_photos))
+
 # 8. tope de profundidad de cola (200) -----------------------------------
 big = [{"url": "u%d" % i} for i in range(300)]
 check("trim_depth recorta a 200", len(AP.trim_depth(big)) == AP.DEPTH, len(AP.trim_depth(big)))
