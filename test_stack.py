@@ -140,6 +140,44 @@ def main():
         check("item dry=false explicito gana al top-level dry=true", it2.get("dry") is False, it2)
         check("item explicito igual hereda filter=playa", it2.get("filter") == "playa", it2)
 
+        # --- /autopost: acciones nuevas (interval / next / retry / del) y /log clear ---
+        post("/autopost", {"action": "clear"})
+        st, r = post("/autopost", {
+            "items": [{"url": "https://www.facebook.com/groups/QA_TEST/permalink/9/", "expect": "qa"}],
+            "dry": True})
+        check("POST /autopost encola para probar acciones", st == 200 and r.get("added") == 1, r)
+
+        st, r = post("/autopost", {"action": "interval", "value": 20})
+        check("POST /autopost interval -> ok", st == 200 and r.get("ok") is True, r)
+        check("autoqueue interval_override=20", read_queue(tmp).get("interval_override") == 20,
+              read_queue(tmp).get("interval_override"))
+        st, g = get("/autopost")
+        check("GET /autopost expone interval_override=20", g.get("interval_override") == 20,
+              g.get("interval_override"))
+        post("/autopost", {"action": "interval", "value": 0})
+        check("interval 0 limpia el override",
+              read_queue(tmp).get("interval_override") in (None, 0), read_queue(tmp).get("interval_override"))
+
+        st, r = post("/autopost", {"action": "next"})
+        check("POST /autopost next -> ok", st == 200 and r.get("ok") is True, r)
+
+        st, r = post("/autopost", {"action": "retry",
+                                   "url": "https://www.facebook.com/groups/QA_TEST/permalink/9/"})
+        check("POST /autopost retry -> ok", st == 200 and r.get("ok") is True, r)
+        check("retry rearma el item (state pendiente)",
+              any(i.get("state") == "pendiente" for i in (read_queue(tmp).get("items") or [])),
+              read_queue(tmp).get("items"))
+
+        st, g = get("/autopost")
+        check("GET /autopost trae la cola (items)", isinstance(g.get("items"), list) and len(g.get("items")) == 1, g.get("items"))
+
+        st, r = post("/autopost", {"action": "del", "index": 0})
+        check("POST /autopost del -> ok/removed", st == 200 and r.get("ok") is True and r.get("removed") is True, r)
+        check("del deja la cola vacia", len(read_queue(tmp).get("items") or []) == 0, read_queue(tmp).get("items"))
+
+        st, r = post("/log", {"clear": True, "job": "autopost"})
+        check("POST /log clear -> ok/cleared", st == 200 and r.get("ok") is True and "autopost" in (r.get("cleared") or []), r)
+
         # Limpieza: cola vacia y despausada para no dejar estado tras el test.
         post("/autopost", {"action": "clear"})
         post("/autopost", {"action": "pause", "value": False})

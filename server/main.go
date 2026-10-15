@@ -414,6 +414,15 @@ var (
 	autopostSpec = jobSpec{
 		label: "automatizacion", script: "autopost.py", status: "autopost_status.json",
 		cmd: "autopost.cmd.json", pid: "autopost.pid", log: "/tmp/cxt_autopost.log",
+		summary: func(m map[string]any) {
+			q := readAutoQueue()
+			m["items"] = q.Items
+			m["queue_len"] = len(q.Items)
+			m["paused"] = q.Paused
+			if q.IntervalOverride != nil {
+				m["interval_override"] = *q.IntervalOverride
+			}
+		},
 	}
 )
 
@@ -491,6 +500,10 @@ func autoQueuePath() string { return filepath.Join(cxtDir(), "autoqueue.json") }
 type autoQueue struct {
 	Paused bool  `json:"paused"`
 	Items  []any `json:"items"`
+	// IntervalOverride (ACELERAR): ritmo en minutos impuesto a TODA la cola con
+	// maxima prioridad sobre el interval_min de cada item (autopost.effective_interval).
+	// nil = sin override (ritmo normal). Se clampa a [MIN,MAX] en el worker.
+	IntervalOverride *float64 `json:"interval_override,omitempty"`
 }
 
 // writeFileAtomic escribe b en path de forma atomica (temp en el mismo dir +
@@ -537,6 +550,55 @@ func writeAutoQueue(q autoQueue) error {
 		return err
 	}
 	return writeFileAtomic(autoQueuePath(), b)
+}
+
+// autopostCmdPath: canal de comando one-shot del worker residente (autopost.py
+// --cmd). El worker lo lee y BORRA en cada tick (consume_cmd), por eso sirve
+// para acciones puntuales (SIGUIENTE / REINTENTAR) que no son estado de la cola.
+func autopostCmdPath() string { return filepath.Join(cxtDir(), autopostSpec.cmd) }
+
+func writeAutopostCmd(m map[string]any) error {
+	b, _ := json.Marshal(m)
+	return writeFileAtomic(autopostCmdPath(), b)
+}
+
+// resetAutoItem rearma los items de ese url en la cola (state -> pendiente,
+// error vacio) para que el worker los vuelva a tomar. REINTENTAR lo combina con
+// el borrado del intento por cmd, porque el estado del item vive en la cola.
+func resetAutoItem(url string) (int, error) {
+	q := readAutoQueue()
+	n := 0
+	for _, it := range q.Items {
+		m, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		if u, _ := m["url"].(string); url != "" && u == url {
+			m["state"] = "pendiente"
+			m["error"] = ""
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	if err := writeAutoQueue(q); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// removeAutoIndex elimina el item en la posicion idx (0-based) de la cola.
+func removeAutoIndex(idx int) (bool, error) {
+	q := readAutoQueue()
+	if idx < 0 || idx >= len(q.Items) {
+		return false, nil
+	}
+	q.Items = append(q.Items[:idx], q.Items[idx+1:]...)
+	if err := writeAutoQueue(q); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // autopostDefaultKeys son los campos de nivel superior del POST /autopost que
@@ -690,6 +752,69 @@ func (s *server) handleAutopostSet(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, 200, map[string]any{"ok": true, "paused": value})
+		case "next":
+			// SIGUIENTE: comando one-shot al worker para publicar YA (salta el
+			// gate de intervalo). No toca pausa ni tope diario.
+			if err := writeAutopostCmd(map[string]any{"action": "next"}); err != nil {
+				http.Error(w, "no se pudo escribir", http.StatusInternalServerError)
+				return
+			}
+			ensureAutopost()
+			writeJSON(w, 200, map[string]any{"ok": true, "next": true})
+		case "interval":
+			// ACELERAR: fija el intervalo (min) de TODA la cola. value<=0 quita
+			// el override (vuelve al ritmo por item). El worker lo clampa a [MIN,MAX].
+			v, has := st["value"].(float64)
+			s.queueMu.Lock()
+			q := readAutoQueue()
+			if !has || v <= 0 {
+				q.IntervalOverride = nil
+			} else {
+				q.IntervalOverride = &v
+			}
+			err := writeAutoQueue(q)
+			s.queueMu.Unlock()
+			if err != nil {
+				http.Error(w, "no se pudo escribir", http.StatusInternalServerError)
+				return
+			}
+			out := map[string]any{"ok": true}
+			if q.IntervalOverride != nil {
+				out["interval_override"] = *q.IntervalOverride
+			}
+			writeJSON(w, 200, out)
+		case "retry":
+			// REINTENTAR: rearma en la cola los items de ese url y pide al worker
+			// que borre su intento de fallo (nunca uno "hecho").
+			url, _ := st["url"].(string)
+			if url == "" {
+				badJSON()
+				return
+			}
+			s.queueMu.Lock()
+			n, err := resetAutoItem(url)
+			s.queueMu.Unlock()
+			if err != nil {
+				http.Error(w, "no se pudo escribir", http.StatusInternalServerError)
+				return
+			}
+			if err := writeAutopostCmd(map[string]any{"action": "retry", "url": url}); err != nil {
+				http.Error(w, "no se pudo escribir", http.StatusInternalServerError)
+				return
+			}
+			ensureAutopost()
+			writeJSON(w, 200, map[string]any{"ok": true, "retry": true, "rearmed": n})
+		case "del":
+			// Borra un item puntual de la cola por indice (lista del popup).
+			idx, _ := st["index"].(float64)
+			s.queueMu.Lock()
+			ok, err := removeAutoIndex(int(idx))
+			s.queueMu.Unlock()
+			if err != nil {
+				http.Error(w, "no se pudo escribir", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, 200, map[string]any{"ok": true, "removed": ok})
 		default:
 			badJSON()
 		}
@@ -1020,9 +1145,52 @@ var jobLogs = map[string]string{
 	"autopost":  "/tmp/cxt_autopost.log",
 }
 
-// handleLog devuelve las ultimas N lineas del log del trabajo.
+// truncateFile vacia un log preservando el archivo: los escritores lo abren en
+// O_APPEND, asi que tras truncar siguen escribiendo al final.
+func truncateFile(path string) bool {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	return true
+}
+
+// handleLog: GET = ultimas N lineas; POST {clear:true, job|all} = limpiar log(s).
 func (s *server) handleLog(w http.ResponseWriter, r *http.Request) {
 	if !s.auth(w, r) {
+		return
+	}
+	if r.Method == http.MethodPost {
+		var st map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&st)
+		if st == nil {
+			st = map[string]any{}
+		}
+		clear, _ := st["clear"].(bool)
+		if !clear {
+			writeJSON(w, 400, map[string]any{"ok": false, "error": "falta clear:true"})
+			return
+		}
+		cleared := []string{}
+		if all, _ := st["all"].(bool); all {
+			for name, path := range jobLogs {
+				if truncateFile(path) {
+					cleared = append(cleared, name)
+				}
+			}
+		} else {
+			job, _ := st["job"].(string)
+			p, ok := jobLogs[job]
+			if !ok {
+				writeJSON(w, 400, map[string]any{"ok": false, "error": "job desconocido"})
+				return
+			}
+			if truncateFile(p) {
+				cleared = append(cleared, job)
+			}
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "cleared": cleared})
 		return
 	}
 	job := r.URL.Query().Get("job")
