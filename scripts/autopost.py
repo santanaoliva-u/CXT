@@ -102,6 +102,8 @@ def interval_ms(mins, rng=None):
 def effective_interval(item=None, q=None):
     """Intervalo efectivo (min) para el item en curso, con prioridad (T23):
 
+      0. `interval_override` de nivel superior de la cola (ACELERAR del popup):
+         gana a TODO, para poder cambiar el ritmo de items YA encolados.
       1. el `interval_min` del PROPIO item en curso/siguiente
       2. el `interval_min` de nivel superior de la cola
       3. el recomendado INTERVAL_REC
@@ -112,6 +114,9 @@ def effective_interval(item=None, q=None):
     vive en el item. Leer solo q["interval_min"] (clave que el daemon nunca
     escribe) hacia que el intervalo efectivo fuera siempre REC. Se clampa a
     [MIN, MAX] igual que antes."""
+    ov = q.get("interval_override") if isinstance(q, dict) else None
+    if ov is not None:
+        return clamp_interval(ov)
     for src in (item, q):
         if isinstance(src, dict) and src.get("interval_min") is not None:
             return clamp_interval(src.get("interval_min"))
@@ -271,17 +276,71 @@ def save_attempts(a):
         log("save_attempts err " + str(e))
 
 
-def attempt_mark(key, state, error=""):
+# Un fallo PURO (nada publicado) se puede reintentar hasta MAX_RETRIES intentos.
+# Un intento con published>0 (exito parcial/total) NUNCA se reintenta: evita
+# duplicar el post en los grupos donde ya salio.
+MAX_RETRIES = 3
+
+
+def attempt_mark(key, state, error="", published=None):
     """Marca a-lo-mas-una-vez en el archivo de intentos del worker.
 
     Se llama con "publicando" ANTES de invocar share_post y con "hecho"/"error"
-    DESPUES. Nunca toca autoqueue.json (el daemon sigue siendo su dueño)."""
+    DESPUES. Nunca toca autoqueue.json (el daemon sigue siendo su dueño).
+
+    Guarda ademas `tries` (n.o de intentos iniciados, se incrementa al marcar
+    "publicando") y `published` (grupos que realmente publicaron, tomado de
+    share_post_status.json) para que recover_states pueda decidir un reintento
+    acotado sin arriesgar duplicados."""
     if not key:
         return
     a = load_attempts()
+    prev = a.get(key) or {}
+    tries = int(prev.get("tries", 0) or 0)
+    if state == "publicando":
+        tries += 1
+    pub = int(prev.get("published", 0) or 0)
+    if published is not None:
+        pub = int(published)
     a[key] = {"state": state, "error": (error or "")[:200],
-              "at": int(time.time() * 1000)}
+              "at": int(time.time() * 1000),
+              "tries": tries, "published": pub}
     save_attempts(a)
+
+
+def _retryable(it, a):
+    """True si un item fallido puede reintentarse sin riesgo de duplicados.
+
+    - Un dry NUNCA se reintenta solo (preserva el fix f7ab160 "dry retenido").
+    - Si algo se publico (published>0) NUNCA se reintenta (evita duplicados).
+    - Fallo puro sin publicar nada: reintenta hasta MAX_RETRIES intentos."""
+    if it.get("dry"):
+        return False
+    if int(a.get("published", 0) or 0) > 0:
+        return False
+    if int(a.get("tries", 0) or 0) >= MAX_RETRIES:
+        return False
+    return True
+
+
+def clear_attempt(url):
+    """REINTENTAR manual (cmd del daemon): borra del registro de intentos las
+    entradas de ERROR de ese permalink (clave normal y sufijo ":dry") para que
+    recover_states lo rearme como pendiente. NUNCA borra un intento "hecho":
+    reintentar algo ya publicado duplicaria el post. Devuelve True si cambio."""
+    key = permalink_key(url)
+    if not key:
+        return False
+    a = load_attempts()
+    changed = False
+    for k in (key, key + ":dry"):
+        e = a.get(k)
+        if isinstance(e, dict) and e.get("state") == "error":
+            a.pop(k, None)
+            changed = True
+    if changed:
+        save_attempts(a)
+    return changed
 
 
 def recover_states(items, attempts=None):
@@ -313,8 +372,12 @@ def recover_states(items, attempts=None):
         elif stt == "hecho":
             it["state"] = "hecho"
         elif stt == "error":
-            it["state"] = "error"
-            it["error"] = it.get("error") or a.get("error") or "error"
+            if _retryable(it, a):
+                it["state"] = "pendiente"
+                it["error"] = ""
+            else:
+                it["state"] = "error"
+                it["error"] = it.get("error") or a.get("error") or "error"
     return items
 
 
@@ -639,12 +702,15 @@ def _publish(st, q, items, item, now):
     write_status(st)
 
     bad = bad_item(item)
+    published = 0
     if bad:
         res = {"ok": False, "error": bad}
     else:
         try:
             raw = run_share(item)
             st["dom"]["injected"] = int(st["dom"].get("injected", 0)) + 1
+            if isinstance(raw, dict):
+                published = int(raw.get("published", 0) or 0)
             state, err = item_outcome(raw)
             res = {"ok": state == "hecho", "error": err}
         except Exception as e:
@@ -653,7 +719,7 @@ def _publish(st, q, items, item, now):
     item["state"] = "hecho" if res.get("ok") else "error"
     item["error"] = res.get("error") or ""
     item["done_ms"] = int(time.time() * 1000)
-    attempt_mark(key, item["state"], item["error"])
+    attempt_mark(key, item["state"], item["error"], published=published)
 
     st["results"] = (st.get("results") or [])[-99:] + [{
         "url": item.get("url") or "", "state": item["state"],
@@ -691,6 +757,18 @@ def _tick(st, cmd_path):
     if cmd.get("action") == "pause":
         st["pausado"] = bool(cmd.get("value"))
         log("cmd pause=%s" % st["pausado"])
+    if cmd.get("action") == "next":
+        # SIGUIENTE (popup): adelanta la proxima publicacion a AHORA saltando el
+        # gate de intervalo. No toca la pausa ni el tope diario anti-ban.
+        st["next_at"] = 0
+        log("cmd next: forzar ahora")
+    if cmd.get("action") == "retry":
+        # REINTENTAR (popup): rearma un item fallido borrando su intento de error
+        # y adelanta la publicacion. Un intento "hecho" no se borra (clear_attempt).
+        u = cmd.get("url") or ""
+        if u and clear_attempt(u):
+            st["next_at"] = 0
+            log("cmd retry: %s" % u[:60])
 
     h = health()
     if h is None:

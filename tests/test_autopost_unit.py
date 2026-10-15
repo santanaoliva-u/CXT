@@ -218,7 +218,7 @@ check("item marcado publicando -> hecho al reiniciar (no re-share)", _it["state"
 AP.attempt_mark(AP.item_key({"url": _u}), "error", "boom")
 _it2 = {"url": _u, "state": "pendiente"}
 AP.recover_states([_it2], AP.load_attempts())
-check("item marcado error -> error con su motivo", _it2["state"] == "error" and _it2["error"] == "boom", _it2)
+check("fallo puro (nada publicado) se rearma -> pendiente", _it2["state"] == "pendiente", _it2)
 AP.attempt_mark(AP.item_key({"url": _u}), "hecho")
 _it3 = {"url": _u, "state": "pendiente"}
 AP.recover_states([_it3], AP.load_attempts())
@@ -522,6 +522,126 @@ check("_publish cola top-level=30 (item sin interval_min) -> 30",
 
 AP.run_share = _orig_run_share21
 AP.STATUS = _orig_status21
+
+# 22. reintento acotado de fallos PUROS (sin riesgo de duplicados) ----------
+#     Un fallo donde nada se publico (share_post reported published==0) puede
+#     reintentarse hasta MAX_RETRIES; un exito parcial (published>0) o un dry
+#     NUNCA se reintentan (evita duplicar en los grupos donde ya salio).
+_u22 = "https://www.facebook.com/photo/?fbid=122237246654329580&set=pcb.122237247752329580"
+_key22 = AP.permalink_key(_u22)
+
+AP.save_attempts({})
+AP.attempt_mark(_key22, "publicando")
+AP.attempt_mark(_key22, "error", "fallo en 6 grupo(s)", published=0)
+_it22 = {"url": _u22, "state": "pendiente", "dry": False}
+AP.recover_states([_it22], AP.load_attempts())
+check("22 fallo puro published=0 -> pendiente (se reintenta)", _it22["state"] == "pendiente", _it22)
+
+AP.save_attempts({})
+for _ in range(AP.MAX_RETRIES):
+    AP.attempt_mark(_key22, "publicando")
+    AP.attempt_mark(_key22, "error", "fallo en 6 grupo(s)", published=0)
+_it22b = {"url": _u22, "state": "pendiente", "dry": False}
+AP.recover_states([_it22b], AP.load_attempts())
+check("22 fallo puro tras MAX_RETRIES -> error (deja de reintentar)",
+      _it22b["state"] == "error", (_it22b, AP.load_attempts().get(_key22)))
+
+AP.save_attempts({})
+AP.attempt_mark(_key22, "publicando")
+AP.attempt_mark(_key22, "error", "fallo en 3 grupo(s)", published=3)
+_it22c = {"url": _u22, "state": "pendiente", "dry": False}
+AP.recover_states([_it22c], AP.load_attempts())
+check("22 exito parcial published=3 -> error (evita duplicados)",
+      _it22c["state"] == "error", _it22c)
+
+AP.save_attempts({})
+AP.attempt_mark(AP.item_key({"url": _u22, "dry": True}), "publicando")
+AP.attempt_mark(AP.item_key({"url": _u22, "dry": True}), "error", "dry", published=0)
+_it22d = {"url": _u22, "state": "pendiente", "dry": True}
+AP.recover_states([_it22d], AP.load_attempts())
+check("22 dry fallido -> error (no se reintenta solo)", _it22d["state"] == "error", _it22d)
+
+AP.save_attempts({_key22: {"state": "error", "error": "viejo", "at": 1}})
+_it22e = {"url": _u22, "state": "pendiente", "dry": False}
+AP.recover_states([_it22e], AP.load_attempts())
+check("22 registro viejo sin 'published' -> pendiente (compatible)",
+      _it22e["state"] == "pendiente", _it22e)
+
+AP.save_attempts({})
+AP.attempt_mark(_key22, "publicando")
+AP.attempt_mark(_key22, "hecho", published=6)
+_it22f = {"url": _u22, "state": "pendiente", "dry": False}
+AP.recover_states([_it22f], AP.load_attempts())
+check("22 exito (hecho) -> hecho (no re-share)", _it22f["state"] == "hecho", _it22f)
+
+# 23. override de intervalo de cola (boton ACELERAR del popup) --------------
+#     El popup fija un ritmo global (q["interval_override"]); manda sobre el
+#     item y sobre la cola top-level, siempre clampeado a [MIN, MAX].
+check("23 override 10 gana a item 60 y cola 30",
+      AP.effective_interval({"interval_min": 60},
+                            {"interval_min": 30, "interval_override": 10}) == 10,
+      AP.effective_interval({"interval_min": 60},
+                            {"interval_min": 30, "interval_override": 10}))
+check("23 override 1 -> MIN (10)",
+      AP.effective_interval({}, {"interval_override": 1}) == AP.INTERVAL_MIN,
+      AP.effective_interval({}, {"interval_override": 1}))
+check("23 override 999 -> MAX (60)",
+      AP.effective_interval({}, {"interval_override": 999}) == AP.INTERVAL_MAX,
+      AP.effective_interval({}, {"interval_override": 999}))
+check("23 sin override manda el item (30)",
+      AP.effective_interval({"interval_min": 30}, {"interval_override": None}) == 30,
+      AP.effective_interval({"interval_min": 30}, {"interval_override": None}))
+
+# 24. comandos one-shot: clear_attempt + _tick next/retry --------------------
+_u24 = "https://www.facebook.com/photo/?fbid=122235950288329580&set=pcb.122235950438329580"
+_k24 = AP.permalink_key(_u24)
+AP.save_attempts({})
+AP.attempt_mark(_k24, "publicando")
+AP.attempt_mark(_k24, "error", "x", published=0)
+check("24 clear_attempt borra un error y rearma", AP.clear_attempt(_u24) is True, AP.load_attempts())
+check("24 clear_attempt sin coincidencia -> False", AP.clear_attempt(_u24) is False, AP.load_attempts())
+AP.save_attempts({})
+AP.attempt_mark(_k24, "publicando")
+AP.attempt_mark(_k24, "hecho", published=6)
+check("24 clear_attempt NO borra un 'hecho'", AP.clear_attempt(_u24) is False, AP.load_attempts())
+
+_orig_health24 = AP.health
+_orig_rq24 = AP.read_queue
+_orig_ded24 = AP._dedicated_tab
+_orig_cp24 = AP.checkpoint_now
+_orig_status24 = AP.STATUS
+AP.STATUS = os.path.join(_TMP, "autopost_status24.json")
+AP.health = lambda: {"enabled": True, "share_alive": False, "share_post_alive": False}
+AP._dedicated_tab = lambda: None
+AP.checkpoint_now = lambda tab: ""
+AP.read_queue = lambda: {"paused": False, "items": []}
+
+import json as _json24
+_cmd_next = os.path.join(_TMP, "cmd-next.json")
+open(_cmd_next, "w").write(_json24.dumps({"action": "next"}))
+_st24n = AP.default_status()
+_st24n["next_at"] = 9_999_999_999_999
+AP._tick(_st24n, _cmd_next)
+check("24 cmd next -> st.next_at = 0 (forzar ahora)", _st24n.get("next_at") == 0, _st24n.get("next_at"))
+check("24 cmd next consumido (archivo borrado)", not os.path.exists(_cmd_next), os.path.exists(_cmd_next))
+
+AP.save_attempts({})
+AP.attempt_mark(_k24, "publicando")
+AP.attempt_mark(_k24, "error", "x", published=0)
+_cmd_retry = os.path.join(_TMP, "cmd-retry.json")
+open(_cmd_retry, "w").write(_json24.dumps({"action": "retry", "url": _u24}))
+_st24r = AP.default_status()
+_st24r["next_at"] = 9_999_999_999_999
+AP._tick(_st24r, _cmd_retry)
+check("24 cmd retry -> rearma (borra error) y st.next_at = 0",
+      AP.load_attempts().get(_k24) is None and _st24r.get("next_at") == 0,
+      (AP.load_attempts(), _st24r.get("next_at")))
+
+AP.health = _orig_health24
+AP.read_queue = _orig_rq24
+AP._dedicated_tab = _orig_ded24
+AP.checkpoint_now = _orig_cp24
+AP.STATUS = _orig_status24
 
 print()
 print("RESULT: " + ("PASS" if not fails else "FAIL " + ",".join(fails)))
