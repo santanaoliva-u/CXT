@@ -168,7 +168,23 @@
       <h2>Automatización</h2>
       <p class="hint">Cola de publicaciones programadas: se comparten solas en los grupos cuando les toca.</p>
       <div id="astatus" class="status">cargando…</div>
-      <div class="btnrow"><button id="apause" class="btn">PAUSAR</button><button id="aclear" class="btn sec">LIMPIAR</button></div>
+      <p class="hint" id="aerr" style="display:none"></p>
+      <div class="row">
+        <label for="aintv">Ritmo entre envíos</label>
+        <select id="aintv">
+          <option value="">Automático</option>
+          <option value="10">Rápido (10 min)</option>
+          <option value="15">Normal (15 min)</option>
+          <option value="30">Lento (30 min)</option>
+          <option value="60">Muy lento (60 min)</option>
+        </select>
+      </div>
+      <div class="btnrow"><button id="apause" class="btn">PAUSAR</button><button id="anext" class="btn">SIGUIENTE</button><button id="aclear" class="btn sec">LIMPIAR COLA</button></div>
+      <p class="hint"><b>Cola</b></p>
+      <ul id="aitems" class="res"></ul>
+      <p class="hint"><b>Últimos resultados</b></p>
+      <ul id="ares" class="res"></ul>
+      <div class="btnrow"><button id="alog" class="btn sec">LIMPIAR LOG</button></div>
       <details class="log"><summary>Ver proceso en vivo</summary><pre class="console" id="log_auto">(sin datos)</pre></details>
     </div>
   </section>
@@ -186,6 +202,11 @@
       <div class="bar" id="bar_grp"><i></i></div>
       <div class="btnrow"><button id="grscan" class="btn">ESCANEAR GRUPOS</button></div>
       <details class="log"><summary>Ver proceso en vivo</summary><pre class="console" id="log_grp">(sin datos)</pre></details>
+    </div>
+    <div class="card">
+      <h2>Logs</h2>
+      <p class="hint">Borra los archivos de proceso en vivo. No afecta a la cola ni a los resultados.</p>
+      <button id="logclear" class="btn sec">LIMPIAR TODOS LOS LOGS</button>
     </div>
     <div class="card">
       <h2>Peligro</h2>

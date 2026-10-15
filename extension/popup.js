@@ -203,10 +203,60 @@ async function renderAuto() {
     "Pendientes: " + pending,
     "Actual: " + (s.current || "—"),
     "Hechas: " + (+s.done || 0),
-    "Próximo: " + (!on || paused || !s.next_at ? "—" : fmtEta(s.next_at))
+    "Próximo: " + (!on || paused || !s.next_at ? "—" : fmtEta(s.next_at)),
+    "Ritmo: " + (+s.interval_min ? s.interval_min + " min" : "automático")
   ];
   if (autoMsg) { lines.push(autoMsg); autoMsg = ""; }
   $("astatus").textContent = lines.join("\n");
+
+  const e = (s.error || "").trim();
+  const ae = $("aerr");
+  if (ae) { ae.textContent = e ? "⚠ " + e : ""; ae.style.display = e ? "" : "none"; }
+
+  const sel = $("aintv");
+  if (sel) sel.value = s.interval_override ? String(s.interval_override) : "";
+
+  const items = Array.isArray(s.items) ? s.items : [];
+  const ulI = $("aitems");
+  if (ulI) {
+    ulI.innerHTML = "";
+    if (!items.length) ulI.innerHTML = '<li class="hint">(cola vacía)</li>';
+    items.forEach((it, i) => {
+      const stt = it.state || "pendiente";
+      const li = document.createElement("li");
+      li.className = stt === "error" ? "bad" : stt === "hecho" ? "ok" : "warn";
+      const who = it.filter ? "[" + it.filter + "] " : "";
+      const nm = it.text ? String(it.text).slice(0, 40) : (it.url || "");
+      const span = document.createElement("span");
+      span.textContent = (stt === "hecho" ? "✓ " : stt === "error" ? "✗ " : "• ") + who + nm + (it.dry ? " (dry)" : "");
+      span.title = (it.error ? it.error + "\n" : "") + (it.url || "");
+      li.appendChild(span);
+      if (stt !== "hecho") {
+        const b1 = document.createElement("button");
+        b1.className = "btn sec"; b1.textContent = "↻"; b1.title = "Reintentar este";
+        b1.addEventListener("click", async () => { await send("autopostSet", { action: "retry", url: it.url }); autoMsg = "✓ reintento pedido"; tick(); });
+        const b2 = document.createElement("button");
+        b2.className = "btn stop"; b2.textContent = "✕"; b2.title = "Quitar de la cola";
+        b2.addEventListener("click", async () => { await send("autopostSet", { action: "del", index: i }); autoMsg = "✓ quitado de la cola"; tick(); });
+        li.append(" ", b1, b2);
+      }
+      ulI.appendChild(li);
+    });
+  }
+
+  const res = Array.isArray(s.results) ? s.results.slice().reverse() : [];
+  const ulR = $("ares");
+  if (ulR) {
+    ulR.innerHTML = "";
+    if (!res.length) ulR.innerHTML = '<li class="hint">(sin resultados)</li>';
+    res.slice(0, 12).forEach((r) => {
+      const li = document.createElement("li");
+      li.className = r.ok ? "ok" : "bad";
+      li.textContent = (r.ok ? "✓ " : "✗ ") + (r.at ? fmtTime(r.at) + " · " : "") + (r.error || r.text || r.url || "");
+      ulR.appendChild(li);
+    });
+  }
+
   setBadge("b_auto", pending > 0, pending > 0 ? String(pending) : "");
   await setLog(JOB.auto, "log_auto", on && !paused);
 }
@@ -336,6 +386,35 @@ function wire() {
     if (!confirm("¿Vaciar la cola de automatización?")) return;
     const r = await send("autopostSet", {action:"clear"});
     autoMsg = r && (r.ok === false || r.error) ? "✗ " + (r.error || "no se pudo") : "✓ cola vaciada";
+    tick();
+  });
+
+  $("anext").addEventListener("click", async () => {
+    if (!confirm("¿Forzar el envío del siguiente ahora (ignora el intervalo de espera)?")) return;
+    const r = await send("autopostSet", {action:"next"});
+    autoMsg = r && (r.ok === false || r.error) ? "✗ " + (r.error || "no se pudo") : "✓ siguiente ya";
+    tick();
+  });
+
+  $("aintv").addEventListener("change", async () => {
+    const v = +$("aintv").value || 0;
+    const r = await send("autopostSet", {action:"interval", value:v});
+    autoMsg = r && (r.ok === false || r.error) ? "✗ " + (r.error || "no se pudo") : (v ? "✓ ritmo " + v + " min" : "✓ ritmo automático");
+    tick();
+  });
+
+  $("alog").addEventListener("click", async () => {
+    if (!confirm("¿Borrar el log de automatización?")) return;
+    const r = await send("logClear", {job:"autopost", clear:true});
+    autoMsg = r && (r.ok === false || r.error) ? "✗ " + (r.error || "no se pudo") : "✓ log borrado";
+    tick();
+  });
+
+  const lc = $("logclear");
+  if (lc) lc.addEventListener("click", async () => {
+    if (!confirm("¿Borrar TODOS los logs?")) return;
+    const r = await send("logClear", {all:true, clear:true});
+    autoMsg = r && (r.ok === false || r.error) ? "✗ " + (r.error || "no se pudo") : "✓ logs borrados";
     tick();
   });
 

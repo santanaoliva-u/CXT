@@ -1007,6 +1007,7 @@ const API = {
   groupscanGet: { path: "/groupscan" },
   groupscanSet: { path: "/groupscan", method: "POST" },
   logGet: { path: "/log" },
+  logClear: { path: "/log", method: "POST" },
 };
 chrome.runtime.onMessage.addListener((msg, _s, send) => {
   if (!msg || !msg.type) return;
