@@ -58,7 +58,21 @@ def js_find_share(expect=""):
     return "(()=>{" + JS_VISIBLE + """
  const norm=(s)=>(s||'').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toLowerCase();
  const w=norm(""" + e + """);
- const all=[...document.querySelectorAll('[aria-label]')].filter(el=>/^(share|compartir)$/i.test((el.getAttribute('aria-label')||'').trim())).filter(vis);
+ // El control Compartir real usa un aria-label LARGO ("Share, send this to
+ // friends or post it on your profile."): casar por PREFIJO (misma regla que
+ // content.js) y excluir las opciones del menu nativo ("Share to a group"...).
+ const SHARE_RE=/^(share|compartir|comparte|share this|comparte esto)\\b/i;
+ const MENU=['compartir en un grupo','share to a group','compartir ahora','share now'];
+ const isShare=(a)=>{const t=(a||'').trim();if(!SHARE_RE.test(t))return false;
+   if(MENU.indexOf(t.toLowerCase())>=0)return false;
+   if(/^(share|compartir)\\s+(settings|options|permissions|ajustes|opciones|preferencias)\\b/i.test(t))return false;
+   return true;};
+ const seen=new Set();
+ const all=[...document.querySelectorAll('[aria-label]')]
+   .filter(el=>isShare(el.getAttribute('aria-label')||''))
+   .map(el=>el.closest('div[role=button],a[role=button],button')||el)
+   .filter(el=>{if(seen.has(el))return false;seen.add(el);return true;})
+   .filter(vis);
  if(!all.length) return null;
  const dlg=[...document.querySelectorAll('div[role=dialog]')].filter(vis).find(d=>d.querySelector('[aria-label="Share"],[aria-label="Compartir"],[role=article]'));
  let el=null, scope='none', box=null;
@@ -70,22 +84,20 @@ def js_find_share(expect=""):
    el=all.find(x=>box.contains(x))||null;
    scope=dlg?'dialog':'article';
  }
-  if(!el){
-    // Sin expect (o basura ya filtrada): el post visible de la pestaña dedicada.
-    if(!w){
-      const main=document.querySelector('[role=main]')||document.body;
-      const cands=all.filter(e=>main.contains(e)).sort((a,b)=>a.getBoundingClientRect().y-b.getBoundingClientRect().y);
-      el=cands[0]||null; scope='main';
-    } else {
-      // Permalink de foto/video sin role=article: el Share del main es el del post.
-      if(/\\/posts\\/|\\/permalink|\\/share\\/p\\/|\\/photo|\\/videos\\//.test(location.href)){
-        const main=document.querySelector('[role=main]')||document.body;
-        const cands=all.filter(e=>main.contains(e)).sort((a,b)=>a.getBoundingClientRect().y-b.getBoundingClientRect().y);
-        el=cands[0]||null; scope='main';
-      }
-      if(!el) return null;
-    }
-  }
+ if(!el){
+   // Fallback: post visible de la pestaña dedicada o permalink de foto/video.
+   // El boton Compartir del visor vive FUERA de [role=main]: si no hay
+   // candidatos dentro de main, se usan todos y se elige el mas alto (y).
+   const pm=/\\/posts\\/|\\/permalink|\\/share\\/p\\/|\\/photo|\\/videos\\//.test(location.href);
+   if(!w || pm){
+     const main=document.querySelector('[role=main]');
+     let cands=(main?all.filter(e=>main.contains(e)):[]);
+     if(!cands.length) cands=all.slice();
+     cands.sort((a,b)=>a.getBoundingClientRect().y-b.getBoundingClientRect().y);
+     el=cands[0]||null; scope='fallback';
+   }
+   if(!el) return null;
+ }
  if(!el) return null;
  el.scrollIntoView({block:'center'});
  const r=el.getBoundingClientRect();
