@@ -247,6 +247,31 @@ if (!window.__cxtAuto) {
       return fb;
     }
 
+    // El Share vive dentro de un wrapper flex-column; el action bar real es el
+    // flex-row del abuelo. Sin subir ahí el control cae debajo, no al lado.
+    function insertControl(host, shareEl, container) {
+      if (!shareEl) {
+        container.appendChild(host);
+        return;
+      }
+      var node = shareEl;
+      var parent = shareEl.parentElement;
+      for (var up = 0; parent && up < 5; up++) {
+        var cs = null;
+        try { cs = getComputedStyle(parent); } catch (e) { break; }
+        if (cs && cs.display === "flex" &&
+            (cs.flexDirection === "row" || cs.flexDirection === "row-reverse")) {
+          parent.insertBefore(host, node.nextSibling);
+          return;
+        }
+        if (parent.getAttribute && parent.getAttribute("role") === "article") break;
+        node = parent;
+        parent = parent.parentElement;
+      }
+      if (shareEl.parentElement) shareEl.parentElement.insertBefore(host, shareEl.nextSibling);
+      else container.appendChild(host);
+    }
+
     function injectControl(container) {
       var shareEl = findShareControl(container);
       var permalink = extractPermalink(container);
@@ -259,8 +284,7 @@ if (!window.__cxtAuto) {
 
       try {
         container.setAttribute("data-cxt-auto", id);
-        if (shareEl && shareEl.parentElement) shareEl.parentElement.insertBefore(host, shareEl.nextSibling);
-        else container.appendChild(host);
+        insertControl(host, shareEl, container);
       } catch (e) { stats.errors++; return false; }
 
       registry.set(container, rec);
