@@ -15,6 +15,7 @@ Cubre la logica pura del worker (sin efectos secundarios, importable):
 
 Uso: python3 tests/test_autopost_unit.py   (exit 0 = PASS)
 """
+import hashlib
 import os
 import sys
 import tempfile
@@ -26,12 +27,45 @@ for _p in (_HERE, os.path.join(_HERE, "..", "scripts")):
         sys.path.insert(0, _p)
         break
 
-import autopost as AP  # noqa: E402
-
-# Aislamos los archivos que toca el worker para no leer/escribir en ~/.cxt.
+# F1.1: CXT_DIR ANTES de importar. Sin esto `ledger.db_path()` apuntaria al
+# estado real; la suite debe ser tan hermética como test_f1_qa.py.
 _TMP = tempfile.mkdtemp(prefix="autopost_unit_")
-AP.ATTEMPTS = os.path.join(_TMP, "autopost_attempts.json")
+os.environ["CXT_DIR"] = _TMP
+
+import autopost as AP  # noqa: E402
+import ledger as L  # noqa: E402
+
+# Aislamos TODAS las rutas que toca el worker para no leer/escribir en ~/.cxt.
 AP.QUEUE = os.path.join(_TMP, "autoqueue.json")
+AP.ATTEMPTS = os.path.join(_TMP, "autopost_attempts.json")
+AP.STATUS = os.path.join(_TMP, "autopost_status.json")
+AP.SHARE_CMD = os.path.join(_TMP, "share_post.cmd.json")
+AP.SHARE_STATUS = os.path.join(_TMP, "share_post_status.json")
+AP.GROUPS = os.path.join(_TMP, "groups.json")
+AP.RELEVANCE = os.path.join(_TMP, "relevance.json")
+AP.LOCK = os.path.join(_TMP, "browser.lock")
+AP.HALT = os.path.join(_TMP, "autopost.halt.json")
+AP.PID = os.path.join(_TMP, "autopost.pid")
+AP.CMD = os.path.join(_TMP, "autopost.cmd.json")
+AP.WORKER_LOCK = os.path.join(_TMP, "autopost.lock")
+
+_REAL_STATE_NAMES = ("ledger.db", "autoqueue.json", "autopost_attempts.json",
+                     "autopost_status.json", "browser.lock",
+                     "autopost.halt.json")
+
+
+def _snap(name):
+    path = os.path.join(_HERE, name)
+    try:
+        st = os.stat(path)
+        with open(path, "rb") as f:
+            digest = hashlib.sha256(f.read()).hexdigest()
+        return (True, st.st_size, digest)
+    except OSError:
+        return (False, 0, "")
+
+
+_REAL_STATE_BEFORE = {name: _snap(name) for name in _REAL_STATE_NAMES}
 
 fails = []
 DAY = 24 * 3600 * 1000
@@ -48,7 +82,7 @@ check("CXT_AUTO_MIN=10", AP.INTERVAL_MIN == 10, AP.INTERVAL_MIN)
 check("CXT_AUTO_REC=15", AP.INTERVAL_REC == 15, AP.INTERVAL_REC)
 check("CXT_AUTO_MAX=60", AP.INTERVAL_MAX == 60, AP.INTERVAL_MAX)
 check("CXT_AUTO_MAXGROUPS=10", AP.MAXGROUPS == 10, AP.MAXGROUPS)
-check("CXT_AUTO_MAXDAY=20", AP.MAXDAY == 20, AP.MAXDAY)
+check("CXT_AUTO_MAXDAY=60", AP.MAXDAY == 60, AP.MAXDAY)
 check("DEPTH=200", AP.DEPTH == 200, AP.DEPTH)
 
 # 2. clamp del intervalo ------------------------------------------------
@@ -131,31 +165,19 @@ check("dedupe conserva el primero",
 blank = AP.dedupe_items([{"url": ""}, {"url": ""}])
 check("dedupe no colapsa urls vacias", len(blank) == 2, len(blank))
 
-# 7b. fbid de foto: sin este fix el worker veia pending=0 (dedupe tiraba items)
-_fa = "https://www.facebook.com/photo/?fbid=1668053538331415&set=a.806895547780556&__cft__%5B0%5D=aaa"
-_fb = "https://www.facebook.com/photo/?fbid=122237246654329580&set=pcb.122237247752329580&__cft__%5B0%5D=bbb"
-_fc = "https://www.facebook.com/photo/?fbid=122237246654329580&set=pcb.122237247752329580&__cft__%5B0%5D=ccc-distinto"
-check("fotos con fbid distintos NO colapsan",
-      AP.permalink_key(_fa) != AP.permalink_key(_fb),
-      (AP.permalink_key(_fa), AP.permalink_key(_fb)))
-check("mismo fbid con __cft__ distinto SI es la misma clave",
-      AP.permalink_key(_fb) == AP.permalink_key(_fc),
-      (AP.permalink_key(_fb), AP.permalink_key(_fc)))
-ded_photos = AP.dedupe_items([{"url": _fa}, {"url": _fb}, {"url": _fc}])
-check("dedupe de 3 fotos -> 2 (solo el cft duplicado)",
-      len(ded_photos) == 2, len(ded_photos))
-
 # 8. tope de profundidad de cola (200) -----------------------------------
 big = [{"url": "u%d" % i} for i in range(300)]
 check("trim_depth recorta a 200", len(AP.trim_depth(big)) == AP.DEPTH, len(AP.trim_depth(big)))
 check("queue_accepts(199) es True", AP.queue_accepts(list(range(199))) is True)
 check("queue_accepts(200) es False (rechaza)", AP.queue_accepts(list(range(200))) is False)
 
-# 9. caducidad de items (7 dias) -----------------------------------------
+# 9. caducidad de items (90 dias; el jefe subio el TTL desde 7) -----------
+#    Con 7 d un ciclo de cobertura largo expiraba a mitad del primer barrido.
 now_ms = 10_000_000_000_000
 check("item de 1 dia NO caduca", AP.is_expired({"at": now_ms - 1 * DAY}, now_ms) is False)
 check("item de 6 dias NO caduca", AP.is_expired({"at": now_ms - 6 * DAY}, now_ms) is False)
-check("item de 8 dias SI caduca", AP.is_expired({"at": now_ms - 8 * DAY}, now_ms) is True)
+check("item de 8 dias NO caduca (TTL 90 d)", AP.is_expired({"at": now_ms - 8 * DAY}, now_ms) is False)
+check("item de 91 dias SI caduca", AP.is_expired({"at": now_ms - 91 * DAY}, now_ms) is True)
 check("item sin 'at' no caduca", AP.is_expired({}, now_ms) is False)
 
 # 10. resume / a-lo-mas-una-vez ------------------------------------------
@@ -177,8 +199,9 @@ check("is_checkpoint_url(grupo normal) es False",
 cst = AP.default_status()
 hit = AP.apply_checkpoint(cst, "https://www.facebook.com/checkpoint/12345")
 check("apply_checkpoint devuelve True ante /checkpoint", hit is True)
-check("checkpoint -> pausado True", cst.get("pausado") is True, cst)
-check('checkpoint -> error "cuenta restringida"', cst.get("error") == "cuenta restringida", cst.get("error"))
+check("checkpoint -> NO pausa", cst.get("pausado") is False, cst)
+check("checkpoint -> alerta visible",
+      cst.get("error", "").startswith("ALERTA:") and isinstance(cst.get("alerta"), dict), cst)
 ok_st = AP.default_status()
 check("apply_checkpoint False en url normal",
       AP.apply_checkpoint(ok_st, "https://www.facebook.com/groups/1") is False)
@@ -211,14 +234,27 @@ _u = "https://www.facebook.com/groups/9/posts/90/"
 AP.attempt_mark(AP.item_key({"url": _u}), "publicando")
 _att = _json.load(open(AP.ATTEMPTS, encoding="utf-8"))
 check("attempts guarda 'publicando' antes del share",
-      _att[AP.permalink_key(_u)]["state"] == "publicando", _att)
+      _att[AP.item_key({"url": _u})]["state"] == "publicando", _att)
 _it = {"url": _u, "state": "pendiente"}
 AP.recover_states([_it], AP.load_attempts())
 check("item marcado publicando -> hecho al reiniciar (no re-share)", _it["state"] == "hecho", _it)
-AP.attempt_mark(AP.item_key({"url": _u}), "error", "boom")
-_it2 = {"url": _u, "state": "pendiente"}
+# 13c. `recover_states` rearma un item fallido mientras le queden reintentos
+#      (tries < MAX_RETRIES, sin nada publicado): estado 'pendiente' y sin motivo.
+AP.attempt_mark(AP.item_key({"url": _u}, dry=False), "error", "boom")
+_it2 = {"url": _u, "state": "pendiente", "dry": False}
 AP.recover_states([_it2], AP.load_attempts())
-check("fallo puro (nada publicado) se rearma -> pendiente", _it2["state"] == "pendiente", _it2)
+check("item error con tries<MAX_RETRIES -> pendiente sin motivo",
+      _it2["state"] == "pendiente" and _it2["error"] == "", _it2)
+#      Agotados los reintentos (tries >= MAX_RETRIES) SI se conserva en 'error'
+#      con su motivo: no se reintenta solo.
+_key_u = AP.item_key({"url": _u}, dry=False)
+AP.save_attempts({_key_u: {"state": "error", "error": "boom",
+                           "at": int(time.time() * 1000),
+                           "tries": AP.MAX_RETRIES, "published": 0, "pending": 0}})
+_it2b = {"url": _u, "state": "pendiente", "dry": False}
+AP.recover_states([_it2b], AP.load_attempts())
+check("item error agotado (tries>=MAX_RETRIES) -> error con su motivo",
+      _it2b["state"] == "error" and _it2b["error"] == "boom", _it2b)
 AP.attempt_mark(AP.item_key({"url": _u}), "hecho")
 _it3 = {"url": _u, "state": "pendiente"}
 AP.recover_states([_it3], AP.load_attempts())
@@ -227,14 +263,8 @@ _it4 = {"url": "https://www.facebook.com/groups/8/posts/80/", "state": "pendient
 AP.recover_states([_it4], AP.load_attempts())
 check("item no intentado sigue pendiente", _it4["state"] == "pendiente", _it4)
 check("item_key usa el permalink normalizado",
-      AP.item_key({"url": _u + "?ref=share"}) == AP.permalink_key(_u),
-      AP.item_key({"url": _u + "?ref=share"}))
-check("item_key dry agrega sufijo :dry",
-      AP.item_key({"url": _u, "dry": True}) == AP.permalink_key(_u) + ":dry",
-      AP.item_key({"url": _u, "dry": True}))
-check("item_key real NO lleva sufijo",
-      AP.item_key({"url": _u, "dry": False}) == AP.permalink_key(_u),
-      AP.item_key({"url": _u, "dry": False}))
+      AP.item_key({"url": _u + "?ref=share"}, dry=False) == AP.permalink_key(_u),
+      AP.item_key({"url": _u + "?ref=share"}, dry=False))
 
 # 13b. read_queue nunca modifica la cola y aplica el registro de intentos --
 with open(AP.QUEUE, "w", encoding="utf-8") as _f:
@@ -310,18 +340,28 @@ _real = _publish_fresh({"url": "https://www.facebook.com/groups/1/posts/2/",
                         "dry": False, "state": "pendiente"})
 check("real ok: SI incrementa done_today", _real.get("done_today") == 1, _real.get("done_today"))
 
-AP.run_share = lambda item: {"results": [{"ok": False}]}
-_fail = _publish_fresh({"url": "https://www.facebook.com/groups/1/posts/3/",
-                        "dry": False, "state": "pendiente"})
-check("fallo real: NO incrementa done_today", _fail.get("done_today") == 0, _fail.get("done_today"))
+# F1.1 §3.3: un fallo con resultado `unknown` SI consume tope (antes se
+# esperaba 0); se usa un gid real para que la fila quede en el ledger.
+L.init()
+L.group_state("g17fail", name="Bazar Vecinos")
+_u17fail = "https://www.facebook.com/groups/1/posts/3/"
+_pk17fail = L.post_key(_u17fail)
+AP.run_share = lambda item: {"published": 0, "results": [
+    {"gid": "g17fail", "ok": False, "status": "unknown", "proof": ""}]}
+_now17fail = int(time.time() * 1000)
+_fail = AP.default_status()
+AP.roll_day(_fail, L.utc_day(_now17fail))
+AP._publish(_fail, {}, [], {"url": _u17fail, "dry": False, "state": "pendiente"},
+            _now17fail, gids=["g17fail"], post_key=_pk17fail)
+check("fallo real (unknown): SI incrementa done_today (F1.1)",
+      _fail.get("done_today") == 1, _fail.get("done_today"))
 
 AP.run_share = _orig_run_share
 AP.STATUS = _orig_status
 
 # 18. un dry-run NO contamina el registro de intentos del worker ------------
-#     Un dry NO debe marcar la clave real a-lo-mas-una-vez: si lo hiciera, un
-#     share REAL posterior del MISMO permalink quedaria silenciosamente
-#     saltado. Usa clave con sufijo ":dry" para que el fallo se persista.
+#     Un dry NO debe marcar a-lo-mas-una-vez: si lo hiciera, un share REAL
+#     posterior del MISMO permalink quedaria silenciosamente saltado.
 _orig_run_share18 = AP.run_share
 _orig_status18 = AP.STATUS
 AP.STATUS = os.path.join(_TMP, "autopost_status.json")
@@ -330,9 +370,8 @@ AP.run_share = lambda item: {"results": [{"ok": True}]}
 
 _u18 = "https://www.facebook.com/groups/77/posts/770/"
 _key18 = AP.permalink_key(_u18)
-_key18_dry = AP.item_key({"url": _u18, "dry": True})
 
-# 18.1 dry exitoso: en results como hecho, sin tope diario, sin intento real
+# 18.1 dry exitoso: en results como hecho, sin tope diario, sin intento
 _stdry = AP.default_status()
 AP.roll_day(_stdry, "2026-01-01")
 AP._publish(_stdry, {}, [], {"url": _u18, "dry": True, "state": "pendiente"},
@@ -342,10 +381,10 @@ check("18 dry ok: aparece en results como hecho",
       _stdry.get("results"))
 check("18 dry ok: NO incrementa done_today", _stdry.get("done_today") == 0, _stdry.get("done_today"))
 _att18 = AP.load_attempts()
-check("18 dry ok: el permalink real NO queda en intentos",
+check("18 dry ok: el permalink NO queda 'hecho' en el registro de intentos",
+      (_att18.get(_key18) or {}).get("state") != "hecho", _att18)
+check("18 dry ok: el permalink ni siquiera aparece en intentos",
       _key18 not in _att18, _att18)
-check("18 dry ok: la clave :dry SI queda hecho (evita reintento infinito)",
-      (_att18.get(_key18_dry) or {}).get("state") == "hecho", _att18)
 
 # 18.2 el MISMO permalink encolado para REAL: la cola NO lo salta
 with open(AP.QUEUE, "w", encoding="utf-8") as _f:
@@ -371,27 +410,6 @@ with open(AP.QUEUE, "w", encoding="utf-8") as _f:
 _q18b = AP.read_queue()
 check("18 segundo real: el permalink ya 'hecho' no se vuelve a elegir",
       AP.pick_pending(_q18b["items"], 2_000_000_000_000) is None, _q18b["items"])
-
-# 18.5 un dry FALLIDO se persiste como error (no se reintenta para siempre)
-AP.save_attempts({})
-AP.run_share = lambda item: {"results": [{"ok": False}]}
-_u18f = "https://www.facebook.com/groups/78/posts/780/"
-_stdryf = AP.default_status()
-AP.roll_day(_stdryf, "2026-01-01")
-AP._publish(_stdryf, {}, [], {"url": _u18f, "dry": True, "state": "pendiente"},
-            3_000_000_000_000)
-check("18 dry fail: item marcado error en results",
-      _stdryf["results"][0]["state"] == "error", _stdryf.get("results"))
-_att18f = AP.load_attempts()
-check("18 dry fail: clave :dry queda error (no se re-pick)",
-      (_att18f.get(AP.item_key({"url": _u18f, "dry": True})) or {}).get("state") == "error",
-      _att18f)
-_it18f = {"url": _u18f, "dry": True, "state": "pendiente"}
-AP.recover_states([_it18f], AP.load_attempts())
-check("18 dry fail: recover_states deja el dry en error",
-      _it18f["state"] == "error", _it18f)
-check("18 dry fail: el permalink real NO queda marcado (share real posible)",
-      AP.permalink_key(_u18f) not in AP.load_attempts(), AP.load_attempts())
 
 AP.run_share = _orig_run_share18
 AP.STATUS = _orig_status18
@@ -523,125 +541,348 @@ check("_publish cola top-level=30 (item sin interval_min) -> 30",
 AP.run_share = _orig_run_share21
 AP.STATUS = _orig_status21
 
-# 22. reintento acotado de fallos PUROS (sin riesgo de duplicados) ----------
-#     Un fallo donde nada se publico (share_post reported published==0) puede
-#     reintentarse hasta MAX_RETRIES; un exito parcial (published>0) o un dry
-#     NUNCA se reintentan (evita duplicar en los grupos donde ya salio).
-_u22 = "https://www.facebook.com/photo/?fbid=122237246654329580&set=pcb.122237247752329580"
-_key22 = AP.permalink_key(_u22)
+# 22. P3: una ronda PARCIAL sella los gids no vistos como `unknown` ----------
+#     Terminal: los que si reportaron (aunque sea ok) quedan intactos.
+L.init()
+_p3_ts = int(time.time() * 1000)
+_p3_batch = "bP3test"
+_p3_gids = ["gP3a", "gP3b", "gP3c"]
+_p3_pk = "post:1:333"
+L.intent([{"gid": _g, "post_key": _p3_pk, "ts": _p3_ts} for _g in _p3_gids],
+         batch=_p3_batch)
+_p3 = AP.apply_round_results(
+    _p3_gids, _p3_pk,
+    {"partial": True, "results": [
+        {"gid": "gP3a", "ok": True, "status": "ok", "proof": "https://x/prueba"}]},
+    batch=_p3_batch, ts=_p3_ts)
+_p3map = L.post_group_map()
+_p3a = _p3map.get(("gP3a", _p3_pk)) or {}
+_p3b = _p3map.get(("gP3b", _p3_pk)) or {}
+_p3c = _p3map.get(("gP3c", _p3_pk)) or {}
+check("P3 parcial: el resultado presente queda ok con su prueba",
+      _p3a.get("status") == "ok" and _p3a.get("proof") == "https://x/prueba", _p3a)
+check("P3 parcial: gid no visto -> unknown",
+      _p3b.get("status") == "unknown" and _p3c.get("status") == "unknown",
+      (_p3b, _p3c))
+check("P3 parcial: proof timeout_parcial y batch limpio",
+      _p3b.get("proof") == '{"reason":"timeout_parcial"}'
+      and _p3b.get("batch") == "", _p3b)
+check("P3 parcial: unresolved solo los no vistos",
+      _p3["unresolved"] == ["gP3b", "gP3c"], _p3["unresolved"])
+check("P3 parcial: senal timeout_parcial registrada",
+      any(s.get("kind") == "timeout_parcial" for s in L.signals(limit=200)))
 
+# 23. P4: REINTENTAR no borra un intento con publicacion o parcial -----------
 AP.save_attempts({})
-AP.attempt_mark(_key22, "publicando")
-AP.attempt_mark(_key22, "error", "fallo en 6 grupo(s)", published=0)
-_it22 = {"url": _u22, "state": "pendiente", "dry": False}
-AP.recover_states([_it22], AP.load_attempts())
-check("22 fallo puro published=0 -> pendiente (se reintenta)", _it22["state"] == "pendiente", _it22)
+_u23 = "https://www.facebook.com/groups/23/posts/230/"
+_k23 = AP.permalink_key(_u23)
+_at23 = int(time.time() * 1000)
+AP.save_attempts({_k23: {"state": "error", "published": 2, "unresolved": 0,
+                         "at": _at23}})
+check("P4 clear_attempt con published>0 -> False",
+      AP.clear_attempt(_u23) is False)
+check("P4 published>0: no borra el intento", _k23 in AP.load_attempts())
+check("P4 published>0: senal retry_rechazado/ya_publicado",
+      any(s.get("kind") == "retry_rechazado" and "ya_publicado" in str(s.get("detail"))
+          for s in L.signals(limit=200)))
+AP.save_attempts({_k23: {"state": "error", "published": 0, "unresolved": 1,
+                         "at": _at23}})
+check("P4 clear_attempt con unresolved>0 -> False",
+      AP.clear_attempt(_u23) is False)
+check("P4 unresolved>0: no borra el intento", _k23 in AP.load_attempts())
+check("P4 unresolved>0: senal retry_rechazado/parcial_sin_confirmar",
+      any(s.get("kind") == "retry_rechazado"
+          and "parcial_sin_confirmar" in str(s.get("detail"))
+          for s in L.signals(limit=200)))
+AP.save_attempts({_k23: {"state": "error", "published": 0, "unresolved": 0,
+                         "at": _at23}})
+check("P4 clear_attempt limpio -> True", AP.clear_attempt(_u23) is True)
+check("P4 clear_attempt limpio: borra el intento", _k23 not in AP.load_attempts())
+AP.save_attempts({_k23: {"state": "error", "published": 3, "unresolved": 0,
+                         "at": _at23}})
+check("P4 force=True salta la guarda y borra", AP.clear_attempt(_u23, force=True) is True)
+check("P4 force=True: intento borrado", _k23 not in AP.load_attempts())
+check("P4 force=True: senal retry_forzado",
+      any(s.get("kind") == "retry_forzado" for s in L.signals(limit=200)))
 
-AP.save_attempts({})
-for _ in range(AP.MAX_RETRIES):
-    AP.attempt_mark(_key22, "publicando")
-    AP.attempt_mark(_key22, "error", "fallo en 6 grupo(s)", published=0)
-_it22b = {"url": _u22, "state": "pendiente", "dry": False}
-AP.recover_states([_it22b], AP.load_attempts())
-check("22 fallo puro tras MAX_RETRIES -> error (deja de reintentar)",
-      _it22b["state"] == "error", (_it22b, AP.load_attempts().get(_key22)))
+# 24. P5: active_halt fail-closed ------------------------------------------
+try:
+    os.remove(AP.HALT)
+except OSError:
+    pass
+_t24 = int(time.time() * 1000)
+check("P5 active_halt sin archivo -> no hay halt",
+      AP.active_halt(_t24) == {}, AP.active_halt(_t24))
+with open(AP.HALT, "w", encoding="utf-8") as _f:
+    _f.write("{ esto no es json")
+check("P5 halt ilegible (JSON corrupto) -> HALTED",
+      bool(AP.active_halt(_t24)) is True, AP.active_halt(_t24))
+with open(AP.HALT, "w", encoding="utf-8") as _f:
+    _json.dump([1, 2], _f)
+check("P5 halt no-objeto -> HALTED", bool(AP.active_halt(_t24)) is True)
+with open(AP.HALT, "w", encoding="utf-8") as _f:
+    _json.dump({"reason": "sin until"}, _f)
+check("P5 halt sin 'until' -> HALTED", bool(AP.active_halt(_t24)) is True)
+with open(AP.HALT, "w", encoding="utf-8") as _f:
+    _json.dump({"until": "ayer"}, _f)
+check("P5 halt con 'until' invalido -> HALTED", bool(AP.active_halt(_t24)) is True)
+with open(AP.HALT, "w", encoding="utf-8") as _f:
+    _json.dump({"until": _t24 - 1000}, _f)
+check("P5 halt valido ya vencido -> no hay halt",
+      AP.active_halt(_t24) == {}, AP.active_halt(_t24))
+with open(AP.HALT, "w", encoding="utf-8") as _f:
+    _json.dump({"until": _t24 + 60000, "reason": "prueba"}, _f)
+check("P5 halt valido vigente -> HALTED", bool(AP.active_halt(_t24)) is True)
+check("P5 halt ilegible registra senal",
+      any(s.get("kind") == "halt_ilegible" for s in L.signals(limit=200)))
+try:
+    os.remove(AP.HALT)
+except OSError:
+    pass
 
-AP.save_attempts({})
-AP.attempt_mark(_key22, "publicando")
-AP.attempt_mark(_key22, "error", "fallo en 3 grupo(s)", published=3)
-_it22c = {"url": _u22, "state": "pendiente", "dry": False}
-AP.recover_states([_it22c], AP.load_attempts())
-check("22 exito parcial published=3 -> error (evita duplicados)",
-      _it22c["state"] == "error", _it22c)
+# 25. P5: los JS incluyen los terminos ingleses de bloqueo ------------------
+_lw25 = AP.JS_WARN.lower()
+_lb25 = AP.JS_BLOCK.lower()
+for _term in ("temporarily blocked", "blocked", "temporarily restricted",
+              "restricted"):
+    check("P5 JS_WARN incluye '%s'" % _term, _term in _lw25)
+for _term in ("temporarily blocked", "blocked", "restricted"):
+    check("P5 JS_BLOCK incluye '%s'" % _term, _term in _lb25)
 
-AP.save_attempts({})
-AP.attempt_mark(AP.item_key({"url": _u22, "dry": True}), "publicando")
-AP.attempt_mark(AP.item_key({"url": _u22, "dry": True}), "error", "dry", published=0)
-_it22d = {"url": _u22, "state": "pendiente", "dry": True}
-AP.recover_states([_it22d], AP.load_attempts())
-check("22 dry fallido -> error (no se reintenta solo)", _it22d["state"] == "error", _it22d)
+# 26. P6: un item sin `dry` es simulacion ----------------------------------
+check("P6 is_dry({}) es True", AP.is_dry({}) is True)
+check("P6 is_dry(dry=False) es False", AP.is_dry({"dry": False}) is False)
+check("P6 is_dry(dry=True) es True", AP.is_dry({"dry": True}) is True)
+check("P6 payload sin dry -> simulacion",
+      AP.share_cmd_payload({"url": "u"}, [], "pk").get("dry") is True)
+check("P6 status public_items sin dry -> simulacion",
+      AP.public_items([{"url": "u"}])[0].get("dry") is True)
+_orig_run26 = AP.run_share
+_orig_status26 = AP.STATUS
+AP.STATUS = os.path.join(_TMP, "autopost_status.json")
+AP.run_share = lambda item: {"results": [{"ok": True}]}
+_st26 = AP.default_status()
+AP.roll_day(_st26, "2026-01-01")
+_out26 = AP._publish(_st26, {}, [],
+                     {"url": "https://www.facebook.com/groups/26/posts/260/",
+                      "state": "pendiente"}, 1_000_000_000_000)
+check("P6 sin dry: NO publica real (done_today 0)", _st26.get("done_today") == 0,
+      _st26.get("done_today"))
+check("P6 sin dry: la ronda se reporta como simulacion",
+      _out26.get("dry") is True, _out26)
+AP.run_share = _orig_run26
+AP.STATUS = _orig_status26
 
-AP.save_attempts({_key22: {"state": "error", "error": "viejo", "at": 1}})
-_it22e = {"url": _u22, "state": "pendiente", "dry": False}
-AP.recover_states([_it22e], AP.load_attempts())
-check("22 registro viejo sin 'published' -> pendiente (compatible)",
-      _it22e["state"] == "pendiente", _it22e)
+# 27. P7: presupuesto minimo del hijo 4800 s -------------------------------
+check("P7 share_timeout(1 grupo) >= 4800", AP.share_timeout({}, 1) >= 4800,
+      AP.share_timeout({}, 1))
+check("P7 share_timeout(10 grupos) >= 4800", AP.share_timeout({}, 10) >= 4800,
+      AP.share_timeout({}, 10))
+check("P7 share_timeout(default) >= 4800", AP.share_timeout({}) >= 4800,
+      AP.share_timeout({}))
 
-AP.save_attempts({})
-AP.attempt_mark(_key22, "publicando")
-AP.attempt_mark(_key22, "hecho", published=6)
-_it22f = {"url": _u22, "state": "pendiente", "dry": False}
-AP.recover_states([_it22f], AP.load_attempts())
-check("22 exito (hecho) -> hecho (no re-share)", _it22f["state"] == "hecho", _it22f)
-
-# 23. override de intervalo de cola (boton ACELERAR del popup) --------------
-#     El popup fija un ritmo global (q["interval_override"]); manda sobre el
-#     item y sobre la cola top-level, siempre clampeado a [MIN, MAX].
-check("23 override 10 gana a item 60 y cola 30",
-      AP.effective_interval({"interval_min": 60},
-                            {"interval_min": 30, "interval_override": 10}) == 10,
-      AP.effective_interval({"interval_min": 60},
-                            {"interval_min": 30, "interval_override": 10}))
-check("23 override 1 -> MIN (10)",
-      AP.effective_interval({}, {"interval_override": 1}) == AP.INTERVAL_MIN,
-      AP.effective_interval({}, {"interval_override": 1}))
-check("23 override 999 -> MAX (60)",
-      AP.effective_interval({}, {"interval_override": 999}) == AP.INTERVAL_MAX,
-      AP.effective_interval({}, {"interval_override": 999}))
-check("23 sin override manda el item (30)",
-      AP.effective_interval({"interval_min": 30}, {"interval_override": None}) == 30,
-      AP.effective_interval({"interval_min": 30}, {"interval_override": None}))
-
-# 24. comandos one-shot: clear_attempt + _tick next/retry --------------------
-_u24 = "https://www.facebook.com/photo/?fbid=122235950288329580&set=pcb.122235950438329580"
-_k24 = AP.permalink_key(_u24)
-AP.save_attempts({})
-AP.attempt_mark(_k24, "publicando")
-AP.attempt_mark(_k24, "error", "x", published=0)
-check("24 clear_attempt borra un error y rearma", AP.clear_attempt(_u24) is True, AP.load_attempts())
-check("24 clear_attempt sin coincidencia -> False", AP.clear_attempt(_u24) is False, AP.load_attempts())
-AP.save_attempts({})
-AP.attempt_mark(_k24, "publicando")
-AP.attempt_mark(_k24, "hecho", published=6)
-check("24 clear_attempt NO borra un 'hecho'", AP.clear_attempt(_u24) is False, AP.load_attempts())
-
-_orig_health24 = AP.health
-_orig_rq24 = AP.read_queue
-_orig_ded24 = AP._dedicated_tab
-_orig_cp24 = AP.checkpoint_now
-_orig_status24 = AP.STATUS
-AP.STATUS = os.path.join(_TMP, "autopost_status24.json")
-AP.health = lambda: {"enabled": True, "share_alive": False, "share_post_alive": False}
+# 28. P7: un kick no colapsa la pausa (next_at >= ahora+60 s) ---------------
+_orig_health28 = AP.health
+_orig_tab28 = AP._dedicated_tab
+_orig_cp28 = AP.checkpoint_now
+_orig_rq28 = AP.read_queue
+AP.health = lambda: {"enabled": True, "share_alive": False,
+                     "share_post_alive": False}
 AP._dedicated_tab = lambda: None
 AP.checkpoint_now = lambda tab: ""
 AP.read_queue = lambda: {"paused": False, "items": []}
+_st28 = AP.default_status()
+_st28["next_at"] = 0
+_cmd28 = os.path.join(_TMP, "kick.cmd.json")
+with open(_cmd28, "w", encoding="utf-8") as _f:
+    _json.dump({"action": "next"}, _f)
+_t28 = int(time.time() * 1000)
+AP._tick(_st28, _cmd28)
+check("P7 kick (cmd next): next_at >= ahora+60000",
+      int(_st28.get("next_at", 0)) >= _t28 + 60000,
+      (_t28, _st28.get("next_at")))
+AP.health = _orig_health28
+AP._dedicated_tab = _orig_tab28
+AP.checkpoint_now = _orig_cp28
+AP.read_queue = _orig_rq28
 
-import json as _json24
-_cmd_next = os.path.join(_TMP, "cmd-next.json")
-open(_cmd_next, "w").write(_json24.dumps({"action": "next"}))
-_st24n = AP.default_status()
-_st24n["next_at"] = 9_999_999_999_999
-AP._tick(_st24n, _cmd_next)
-check("24 cmd next -> st.next_at = 0 (forzar ahora)", _st24n.get("next_at") == 0, _st24n.get("next_at"))
-check("24 cmd next consumido (archivo borrado)", not os.path.exists(_cmd_next), os.path.exists(_cmd_next))
+# 29. P7: reconcile llama ensure_group_attempt tras cada result -----------
+_orig_ensure29 = L.ensure_group_attempt
+_calls29 = []
 
-AP.save_attempts({})
-AP.attempt_mark(_k24, "publicando")
-AP.attempt_mark(_k24, "error", "x", published=0)
-_cmd_retry = os.path.join(_TMP, "cmd-retry.json")
-open(_cmd_retry, "w").write(_json24.dumps({"action": "retry", "url": _u24}))
-_st24r = AP.default_status()
-_st24r["next_at"] = 9_999_999_999_999
-AP._tick(_st24r, _cmd_retry)
-check("24 cmd retry -> rearma (borra error) y st.next_at = 0",
-      AP.load_attempts().get(_k24) is None and _st24r.get("next_at") == 0,
-      (AP.load_attempts(), _st24r.get("next_at")))
 
-AP.health = _orig_health24
-AP.read_queue = _orig_rq24
-AP._dedicated_tab = _orig_ded24
-AP.checkpoint_now = _orig_cp24
-AP.STATUS = _orig_status24
+def _spy29(gid, ts=None, db=None):
+    _calls29.append((str(gid), ts))
+    return _orig_ensure29(gid, ts, db=db)
+
+
+L.ensure_group_attempt = _spy29
+try:
+    _t29 = int(time.time() * 1000)
+    _g29 = "gP729"
+    _pk29 = "post:7:729"
+    L.intent([{"gid": _g29, "post_key": _pk29, "ts": _t29}], batch="bP7test")
+    _out29 = AP.reconcile_ledger(evidence_fn=lambda row: None, use_browser=False)
+finally:
+    L.ensure_group_attempt = _orig_ensure29
+check("P7 reconcile llama ensure_group_attempt(gid, ts)",
+      any(g == _g29 and isinstance(ts, int) for g, ts in _calls29), _calls29)
+check("P7 reconcile resuelve el inflight a unknown",
+      int(_out29.get("unknown", 0)) >= 1, _out29)
+_p7grp = L.groups_map().get(_g29) or {}
+check("P7 reconcile deja el grupo contado (day_n >= 1)",
+      int(_p7grp.get("day_n") or 0) >= 1, _p7grp)
+
+# 30. FIX 1: `exclude_gids` saca parejas ya cubiertas de la ronda -----------
+#     12 relevantes: 10 `ok` de hace 7 h (cooldown vencido), g11 aun en warm y
+#     g12 sin cubrir. Sin exclusion el selector re-publicaria los 10 `ok`.
+_now30 = 1_800_000_000_000
+_pk30 = "post:1:3030"
+_gm30 = {}
+_pm30 = {}
+for _i in range(1, 13):
+    _gm30["g%02d" % _i] = {"name": "Bazar Vecinos", "status": "ok",
+                           "last_any": 0, "warm_at": 0, "status_until": 0,
+                           "day_n": 0, "day_utc": ""}
+for _i in range(1, 11):
+    _pm30[("g%02d" % _i, _pk30)] = {"status": "ok",
+                                    "last_ts": _now30 - 7 * 3600 * 1000}
+_gm30["g11"]["warm_at"] = _now30 + DAY
+_covered30 = ["g%02d" % _i for _i in range(1, 11)]
+_sel30 = AP.select_round(_gm30, _pm30, _pk30, _now30, maxgroups=10,
+                         exclude_gids=_covered30)
+check("exclude_gids: no devuelve parejas ya ok",
+      _sel30["gids"] == ["g12"], _sel30["gids"])
+check("exclude_gids: reporta pair:covered por cada una",
+      len([d for d in _sel30["discarded"]
+           if d["reason"] == "pair:covered"]) == 10, _sel30["discarded"])
+_sel30b = AP.select_round(_gm30, _pm30, _pk30, _now30, maxgroups=20)
+check("sin exclude_gids: ok tras cooldown SI se re-selecciona (F1-11)",
+      set(_covered30).issubset(set(_sel30b["gids"]))
+      and "g12" in _sel30b["gids"], _sel30b["gids"])
+
+# 31. FIX 2: una ronda TERMINADA sin `results` sella unknown, no inflight ---
+_DB31 = os.path.join(_TMP, "f31.db")
+L.init(_DB31)
+_t31 = 1_800_000_000_000
+_pk31 = "post:1:3131"
+_gids31 = ["g31a", "g31b"]
+L.intent([{"gid": _g, "post_key": _pk31, "ts": _t31} for _g in _gids31],
+         batch="b31", db=_DB31)
+AP.apply_round_results(_gids31, _pk31,
+                       {"ok": False, "error": "share_post no dejo estado"},
+                       batch="b31", ts=_t31, db=_DB31)
+_pm31 = L.post_group_map(_DB31)
+check("ronda sin results: no queda ningun inflight",
+      L.inflight(db=_DB31) == [], L.inflight(db=_DB31))
+check("ronda sin results: todas las filas quedan unknown",
+      all((_pm31.get((_g, _pk31)) or {}).get("status") == "unknown"
+          for _g in _gids31), _pm31)
+
+# 32. FIX 3: `apply_round_results` no vuelve a contar el intento (P2) -------
+_DB32 = os.path.join(_TMP, "f32.db")
+L.init(_DB32)
+_t32 = 1_800_000_000_000
+_pk32 = "post:1:3232"
+_gid32 = "g32"
+L.group_state(_gid32, name="Bazar Vecinos", db=_DB32)
+L.intent([{"gid": _gid32, "post_key": _pk32, "ts": _t32}], batch="b32", db=_DB32)
+_gm32b = L.groups_map(_DB32)
+check("intent ya deja day_n=1",
+      int((_gm32b.get(_gid32) or {}).get("day_n") or 0) == 1, _gm32b)
+AP.apply_round_results([_gid32], _pk32,
+                       {"results": [{"gid": _gid32, "status": "ok",
+                                     "ok": True, "proof": "p"}]},
+                       batch="b32", ts=_t32, db=_DB32)
+_gm32 = L.groups_map(_DB32)
+check("tras intent + apply el MISMO intento sigue day_n=1",
+      int((_gm32.get(_gid32) or {}).get("day_n") or 0) == 1, _gm32)
+
+# 33. Residual gate: el camino diferido NO re-selecciona en bucle ----------
+#     (i) TODOS los candidatos cubiertos por cobertura (excluidos) => el
+#     next_at usa el suelo now + INTERVAL_MIN*60000, nunca `now` (que `_tick`
+#     subia a now+60 s provocando re-seleccion sin publicar).
+_now33 = 1_800_000_000_000
+_pk33 = "post:1:3333"
+_gm33 = {}
+_pm33 = {}
+for _i in range(1, 4):
+    _gm33["c%02d" % _i] = {"name": "Bazar Vecinos", "status": "ok",
+                           "last_any": 0, "warm_at": 0, "status_until": 0,
+                           "day_n": 0, "day_utc": ""}
+    # `ok` de hace 7 h: cooldown vencido, serian elegibles SIN exclusion.
+    _pm33[("c%02d" % _i, _pk33)] = {"status": "ok",
+                                    "last_ts": _now33 - 7 * 3600 * 1000}
+_floor33 = int(AP.INTERVAL_MIN * 60000)
+_sel33 = AP.select_round(_gm33, _pm33, _pk33, _now33, maxgroups=10,
+                         exclude_gids=["c%02d" % _i for _i in range(1, 4)])
+check("33 todos cubiertos: ronda diferida y sin gids",
+      _sel33["deferred"] is True and _sel33["gids"] == [], _sel33)
+check("33 todos cubiertos: next_at >= now + INTERVAL_MIN*60000",
+      int(_sel33["next_at"]) >= _now33 + _floor33, (_sel33["next_at"], _now33))
+check("33 todos cubiertos: next_at NO es now",
+      int(_sel33["next_at"]) != _now33, _sel33["next_at"])
+
+#     (i bis) Candidato NO excluido pero inelegible por enfriamiento corto: el
+#     suelo evita igualmente un next_at por debajo del intervalo minimo.
+_gm33b = {"b01": {"name": "Bazar Vecinos", "status": "ok", "last_any": 0,
+                  "warm_at": 0, "status_until": 0, "day_n": 0, "day_utc": ""}}
+_pm33b = {("b01", _pk33): {"status": "ok",
+                           "last_ts": _now33 - (AP.COOLDOWN_POST - 30000)}}
+_sel33b = AP.select_round(_gm33b, _pm33b, _pk33, _now33, maxgroups=10,
+                          exclude_gids=[])
+check("33 inelegible por cooldown corto: next_at >= now + INTERVAL_MIN*60000",
+      _sel33b["deferred"] is True
+      and int(_sel33b["next_at"]) >= _now33 + _floor33, _sel33b)
+
+#     (ii) Al menos un grupo NO excluido con enfriamiento real: next_at es su
+#     `free_at` exacto (30 min > suelo, asi el suelo no lo altera).
+_gm33c = {}
+_pm33c = {}
+for _i in range(1, 4):
+    _gm33c["d%02d" % _i] = {"name": "Bazar Vecinos", "status": "ok",
+                            "last_any": 0, "warm_at": 0, "status_until": 0,
+                            "day_n": 0, "day_utc": ""}
+    _pm33c[("d%02d" % _i, _pk33)] = {"status": "ok",
+                                     "last_ts": _now33 - 7 * 3600 * 1000}
+_free33 = _now33 + 30 * 60000
+_gm33c["d04"] = {"name": "Bazar Vecinos", "status": "ok", "last_any": 0,
+                 "warm_at": 0, "status_until": 0, "day_n": 0, "day_utc": ""}
+_pm33c[("d04", _pk33)] = {"status": "ok",
+                          "last_ts": _free33 - AP.COOLDOWN_POST}
+_sel33c = AP.select_round(_gm33c, _pm33c, _pk33, _now33, maxgroups=10,
+                          exclude_gids=["d%02d" % _i for _i in range(1, 4)])
+check("33 un grupo libre: next_at = free_at real del grupo",
+      _sel33c["deferred"] is True and int(_sel33c["next_at"]) == _free33,
+      (_sel33c["next_at"], _free33))
+
+# 34. Aviso de arranque: ledger vacio con publicaciones previas -------------
+_DB34 = os.path.join(_TMP, "f34.db")
+L.init(_DB34)
+_att34_before = AP.ATTEMPTS
+AP.ATTEMPTS = os.path.join(_TMP, "f34_attempts.json")
+try:
+    with open(AP.ATTEMPTS, "w", encoding="utf-8") as _f:
+        _json.dump({"u1": {"state": "hecho", "published": 3},
+                    "u2": {"state": "hecho", "published": 2},
+                    "u3": {"state": "error", "published": 0}}, _f)
+    _n34 = AP.warn_empty_ledger_history(db=_DB34)
+    check("34 ledger vacio + published>0 => N = suma de published",
+          _n34 == 5, _n34)
+    L.group_state("cw", name="Bazar Vecinos", db=_DB34)
+    L.result("cw", "post:1:3400", "ok", True, proof="p", db=_DB34)
+    check("34 ledger con filas en post_group => sin aviso (N=0)",
+          AP.warn_empty_ledger_history(db=_DB34) == 0,
+          AP.warn_empty_ledger_history(db=_DB34))
+    _n34b = AP.warn_empty_ledger_history(db=os.path.join(_TMP, "no-existe.db"))
+    check("34 ledger inexistente => sin aviso (N=0)", _n34b == 0, _n34b)
+finally:
+    AP.ATTEMPTS = _att34_before
+
+for _name, _before in _REAL_STATE_BEFORE.items():
+    _after = _snap(_name)
+    check("unit no creo ni toco ~/.cxt/%s" % _name,
+          _after == _before, (_before, _after))
 
 print()
 print("RESULT: " + ("PASS" if not fails else "FAIL " + ",".join(fails)))

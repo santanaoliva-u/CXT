@@ -78,29 +78,92 @@ def _tabs(cxt):
     return []
 
 
+AUTO_TAB_MARK = "#cxt-auto"
+
+
+def _tab_id(t):
+    """Id de una pestana venga como `id` (lista `tabs`) o `tabId` (ops nuevas)."""
+    return t.get("id") or t.get("tabId") if isinstance(t, dict) else None
+
+
+def _is_auto_tab(t):
+    """True si la extension marco la pestana como propia de automatizacion.
+
+    `tab.ensure_auto` puede exponer la marca como flag (`cxtAuto`) o como hash en
+    la URL (`#cxt-auto`). Solo es una PREFERENCIA al resolver: nunca activa nada."""
+    if not isinstance(t, dict):
+        return False
+    if t.get("cxtAuto") or t.get("cxt_auto"):
+        return True
+    return AUTO_TAB_MARK in (t.get("url") or "")
+
+
 def resolve_tab(cxt=None, url_contains=DEFAULT_TAB_URL):
-    """CXT_TAB si es un entero; si no, el primer tab que contenga url_contains."""
+    """CXT_TAB si es entero; si no, la pestana marcada; si no, la primera de Facebook.
+
+    Solo resuelve un id (compatibilidad con los drivers viejos): no activa, no
+    navega y no roba foco. La pestana marcada es la que crea `tab.ensure_auto`."""
     env = os.environ.get("CXT_TAB")
     if env:
         try:
             return int(env)
         except ValueError:
-            pass  # no numerico: caemos al descubrimiento por url
+            pass  # no numerico (p. ej. "auto"): caemos al descubrimiento por marca
     cxt = cxt or resolve_cxt()
-    for t in _tabs(cxt):
+    tabs = _tabs(cxt)
+    for t in tabs:
+        if _is_auto_tab(t):
+            return _tab_id(t)
+    for t in tabs:
         if url_contains in (t.get("url") or ""):
-            return t.get("id") or t.get("tabId")
+            return _tab_id(t)
     return None
 
 
-def ensure_tab(cxt=None, tab=None, url_contains=DEFAULT_TAB_URL):
-    """Resuelve (si hace falta) y activa la pestana objetivo; devuelve su id."""
+def ensure_background_tab(cxt=None, url=None):
+    """Pide a la extension su pestana/ventana propia (sin foco) y devuelve el id.
+
+    Usa `tab.ensure_auto`, que crea o reutiliza una ventana no enfocada. Si la
+    extension es antigua y la op no existe, falla con RuntimeError: NUNCA se cae
+    a `tab.activate` (eso robaria el foco del usuario)."""
+    cxt = cxt or resolve_cxt()
+    r = call(cxt, "tab.ensure_auto", {"url": url or "https://www.facebook.com/"})
+    tab = _tab_id(r) if isinstance(r, dict) else None
+    if tab is None:
+        detalle = ""
+        if isinstance(r, dict):
+            detalle = r.get("error") or r.get("_err") or r.get("_raw") or ""
+        raise RuntimeError(
+            "tab.ensure_auto no disponible (extension antigua o sin permiso): %s"
+            % (detalle or r))
+    return tab
+
+
+def activate_tab(cxt=None, tab=None):
+    """Activa una pestana DE VERDAD (foco del sistema). Solo uso explicito/CLI.
+
+    La automatizacion no debe llamar a esta funcion: usa `ensure_background_tab`."""
+    cxt = cxt or resolve_cxt()
+    if tab is None:
+        tab = resolve_tab(cxt)
+    if tab is None:
+        raise SystemExit("no encontre pestana de Facebook (set CXT_TAB)")
+    call(cxt, "tab.activate", {"tabId": tab})
+    return tab
+
+
+def ensure_tab(cxt=None, tab=None, url_contains=DEFAULT_TAB_URL, activate=False):
+    """Resuelve la pestana objetivo SIN activarla (modo automatizacion).
+
+    `activate=True` es solo para uso explicito del usuario/CLI; ningun driver de
+    automatizacion debe pasarlo. Se mantiene la firma historica por compatibilidad."""
     cxt = cxt or resolve_cxt()
     if tab is None:
         tab = resolve_tab(cxt, url_contains)
     if tab is None:
         raise SystemExit("no encontre pestana de Facebook (set CXT_TAB)")
-    call(cxt, "tab.activate", {"tabId": tab})
+    if activate:
+        return activate_tab(cxt, tab)
     return tab
 
 

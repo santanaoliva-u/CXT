@@ -9,6 +9,10 @@ async function handle(op, args) {
   if (op === "echo") return args;
   if (op === "sum") return { sum: (args.a || 0) + (args.b || 0) };
   if (op === "read") return { url: "http://mock/", title: "Mock", text: "hola" };
+  if (op === "scrape.page") return { url: "http://mock/", title: "Mock", text: "hola", chars: 4, mode: "main", frames: 0 };
+  if (op === "scrape.markdown") return { url: "http://mock/", title: "Mock", markdown: "# Mock", chars: 6 };
+  if (op === "scrape.tables") return { url: "http://mock/", tables: [{ caption: "c", headers: ["a","b"], rows: [["1","2"]] }], truncated: false };
+  if (op === "scrape.links") return { url: "http://mock/", links: [{ text: "x", href: "http://mock/x", sameOrigin: true }], truncated: false };
   return { error: "op desconocida" };
 }
 

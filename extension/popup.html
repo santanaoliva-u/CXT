@@ -4,70 +4,373 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CXT</title>
+<link rel="preload" href="fonts/Geist-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/GeistMono-var.woff2" as="font" type="font/woff2" crossorigin>
 <style>
-  :root{--bg:#f5f6f8;--card:#fff;--ink:#1f2430;--mut:#6b7280;--line:#e4e6eb;--acc:#2563eb;--ok:#16a34a;--bad:#dc2626;--warn:#d97706;--rad:11px}
-  @media (prefers-color-scheme:dark){:root{--bg:#14161b;--card:#1c1f26;--ink:#e8eaf0;--mut:#98a0ad;--line:#2a2e37;--acc:#5b93ff}}
+  /* ── Phase 2 · fonts (Geist + Geist Mono, SIL OFL 1.1 — see fonts/LICENSE-OFL.txt) ── */
+  @font-face{font-family:"Geist";src:url("fonts/Geist-var.woff2") format("woff2");font-weight:100 900;font-style:normal;font-display:swap}
+  @font-face{font-family:"Geist Mono";src:url("fonts/GeistMono-var.woff2") format("woff2");font-weight:100 900;font-style:normal;font-display:swap}
+
+  /* ── Phase 1 · token contract (plan §4.8, verbatim) ── */
+  :root{
+    /* color — light */
+    --bg-page:#f7f8f8; --bg-surface:#ffffff; --bg-elevated:#ffffff; --bg-sunken:#eef0f3;
+    --line-hairline:#e8eaef; --line:#dfe2e8; --line-strong:#c9cdd6;
+    --ink:#0b0c0e; --ink-2:#3d4249; --mut:#686d76; --ink-3:#9aa0a8;
+    --acc:#4b50c8; --acc-hover:#4044b5; --acc-strong:#4b50c8; --acc-press:#353aa2;
+    --acc-soft:rgba(75,80,200,.12); --acc-wash:rgba(75,80,200,.06); --on-acc:#ffffff;
+    --ok:#0e7a4a; --ok-soft:#e6f4ec; --warn:#8f6110; --warn-soft:#f7efdb; --bad:#c22b33; --bad-soft:#fae9ea;
+    --card-bg:#ffffff;
+    --card-shadow:0 1px 2px rgba(15,18,30,.04),0 1px 1px rgba(15,18,30,.03);
+    --elev-2:0 0 0 1px rgba(15,18,30,.05),0 12px 32px -12px rgba(15,18,30,.18),0 2px 8px rgba(15,18,30,.06);
+    --well-shade:inset 0 1px 2px rgba(15,18,30,.04);
+    --ring:0 0 0 1px var(--acc),0 0 0 4px rgba(75,80,200,.18);
+    --grad-acc:linear-gradient(180deg,#5559d6,#4b50c8);
+    --grad-bar:linear-gradient(90deg,#4b50c8,#7a7ff0);
+    --knob:linear-gradient(180deg,#fdfdff,#dfe2ea);
+    --knob-shadow:0 1px 2px rgba(15,18,30,.25),0 0 0 1px rgba(15,18,30,.08);
+    --console-bg:#0b0d12; --console-ink:#b7bec9;
+    /* type */
+    --font-ui:"Geist",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    --font-mono:"Geist Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --fs-brand:15px; --fs-h2:11px; --fs-label:11.5px; --fs-body:13.5px; --fs-small:12px;
+    --fs-micro:10px; --fs-btn:13px; --fs-console:11.5px;
+    /* space */
+    --sp-1:2px; --sp-2:4px; --sp-3:6px; --sp-4:8px; --sp-5:10px; --sp-6:12px; --sp-7:14px; --sp-8:16px; --sp-9:20px; --sp-10:24px;
+    /* radius */
+    --r-xs:4px; --r-sm:6px; --r-md:8px; --r-card:10px; --r-pill:999px;
+    /* motion */
+    --dur-press:90ms; --dur-tint:140ms; --dur-enter:180ms; --dur-pop:220ms; --dur-bar:420ms;
+    --ease-out:cubic-bezier(.22,1,.36,1); --ease-snap:cubic-bezier(.16,1,.3,1);
+    --ease-spring:cubic-bezier(.34,1.45,.64,1); --ease-tint:cubic-bezier(.4,0,.2,1);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg-page:#08090a; --bg-surface:#0f1011; --bg-elevated:#191a1b; --bg-sunken:#060708;
+      --line-hairline:rgba(255,255,255,.06); --line:rgba(255,255,255,.08); --line-strong:rgba(255,255,255,.14);
+      --ink:#f7f8f8; --ink-2:#d0d6e0; --mut:#8a8f98; --ink-3:#62666d;
+      --acc:#7170ff; --acc-hover:#828fff; --acc-strong:#5e6ad2; --acc-press:#515cc9;
+      --acc-soft:rgba(113,112,255,.16); --acc-wash:rgba(113,112,255,.09); --on-acc:#ffffff;
+      --ok:#10b981; --ok-soft:rgba(16,185,129,.14); --warn:#d9a441; --warn-soft:rgba(217,164,65,.14);
+      --bad:#e5484d; --bad-soft:rgba(229,72,77,.15);
+      --card-bg:linear-gradient(180deg,rgba(255,255,255,.02),rgba(255,255,255,0) 42%),#0f1011;
+      --card-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+      --elev-2:0 0 0 1px rgba(255,255,255,.06),0 12px 32px -8px rgba(0,0,0,.55),0 2px 8px rgba(0,0,0,.4);
+      --well-shade:inset 0 1px 2px rgba(0,0,0,.4);
+      --ring:0 0 0 1px var(--acc),0 0 0 4px var(--acc-soft);
+      --grad-acc:linear-gradient(180deg,#7b7aff,#6667f2);
+      --grad-bar:linear-gradient(90deg,#5e6ad2,#828fff);
+      --knob:linear-gradient(180deg,#fdfdff,#dfe2ea);
+      --knob-shadow:0 1px 2px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.9);
+      --console-bg:#050607; --console-ink:#aab2bf;
+    }
+  }
+
+  /* ── component-only tokens (hover washes, tinted edges) so no raw color leaves :root ── */
+  :root{
+    color-scheme:light dark;
+    --hover-wash:rgba(11,12,14,.03);
+    --dot-halo:rgba(127,132,145,.14);
+    --power-shade:inset 0 1px 2px rgba(15,18,30,.06);
+    --power-on-wash:linear-gradient(180deg,rgba(14,122,74,.12),rgba(14,122,74,.05));
+    --power-on-line:rgba(14,122,74,.30);
+    --power-off-wash:linear-gradient(180deg,rgba(194,43,51,.12),rgba(194,43,51,.05));
+    --power-off-line:rgba(194,43,51,.30);
+    --logo-bg:linear-gradient(180deg,#8b93f5,#5e6ad2);
+    --logo-shadow:inset 0 1px 0 rgba(255,255,255,.35),inset 0 -1px 0 rgba(0,0,0,.2),0 1px 3px rgba(0,0,0,.35),0 0 0 1px rgba(255,255,255,.06);
+    --btn-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 1px 2px rgba(15,18,30,.22);
+    --btn-sec-bg:#f2f3f7;
+    --btn-sec-bg-hover:#e9ebf0;
+    --btn-stop-ring:rgba(194,43,51,.26);
+    --btn-stop-bg-hover:rgba(194,43,51,.14);
+    --danger-line:#f0cfd1;
+    --danger-card-bg:linear-gradient(180deg,rgba(194,43,51,.04),transparent 55%),var(--bg-surface);
+    --alert-line:rgba(194,43,51,.28);
+    --console-shade:inset 0 1px 0 rgba(255,255,255,.03);
+    --grain-op:.015;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --hover-wash:rgba(255,255,255,.03);
+      --dot-halo:rgba(127,132,145,.14);
+      --power-shade:inset 0 1px 2px rgba(0,0,0,.35);
+      --power-on-wash:linear-gradient(180deg,rgba(16,185,129,.22),rgba(16,185,129,.10));
+      --power-on-line:rgba(16,185,129,.35);
+      --power-off-wash:linear-gradient(180deg,rgba(229,72,77,.22),rgba(229,72,77,.10));
+      --power-off-line:rgba(229,72,77,.35);
+      --logo-bg:linear-gradient(180deg,#8b93f5,#5e6ad2);
+      --logo-shadow:inset 0 1px 0 rgba(255,255,255,.35),inset 0 -1px 0 rgba(0,0,0,.2),0 1px 3px rgba(0,0,0,.35),0 0 0 1px rgba(255,255,255,.06);
+      --btn-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 1px 2px rgba(0,0,0,.3);
+      --btn-sec-bg:rgba(255,255,255,.04);
+      --btn-sec-bg-hover:rgba(255,255,255,.07);
+      --btn-stop-ring:rgba(229,72,77,.30);
+      --btn-stop-bg-hover:rgba(229,72,77,.22);
+      --danger-line:rgba(229,72,77,.24);
+      --danger-card-bg:linear-gradient(180deg,rgba(229,72,77,.06),transparent 55%),var(--bg-surface);
+      --alert-line:rgba(229,72,77,.32);
+      --console-shade:inset 0 1px 0 rgba(255,255,255,.03);
+      --grain-op:.022;
+    }
+  }
+
+  /* ── Phase 1 · base / canvas ── */
   *{box-sizing:border-box}
-  body{margin:0;width:380px;font:13px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink)}
-  header{display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
-  header h1{font-size:14px;margin:0;font-weight:700;letter-spacing:.4px}
-  #dot{width:9px;height:9px;border-radius:50%;background:var(--bad);flex:none}
-  #conn{font-size:11px;color:var(--mut);flex:1}
-  #power{border:0;border-radius:20px;padding:6px 12px;font-weight:700;cursor:pointer;color:#fff;background:var(--ok)}
-  #power.off{background:var(--bad)}
-  nav{display:flex;background:var(--card);border-bottom:1px solid var(--line)}
-  nav button{flex:1;border:0;background:none;padding:9px 2px 7px;font:inherit;font-size:11px;color:var(--mut);cursor:pointer;border-bottom:2px solid transparent;position:relative}
-  nav button.on{color:var(--acc);border-bottom-color:var(--acc);font-weight:600}
-  .badge{position:absolute;top:2px;right:5px;min-width:15px;height:15px;line-height:15px;border-radius:8px;background:var(--acc);color:#fff;font-size:9px;padding:0 4px;display:none}
-  .badge.show{display:block}
-  main{padding:12px;max-height:520px;overflow:auto}
+  button{font-family:var(--font-ui)}
+  body{margin:0;width:520px;font-family:var(--font-ui);font-size:var(--fs-body);font-weight:400;line-height:1.55;background:radial-gradient(420px 190px at 30% -50px,var(--acc-wash),transparent 68%),var(--bg-page);color:var(--ink);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+  body::after{content:"";position:fixed;inset:0;z-index:50;pointer-events:none;opacity:var(--grain-op);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");background-size:160px 160px}
+  ::selection{background:var(--acc-soft);color:var(--ink)}
+  button:focus-visible,summary:focus-visible{outline:0;box-shadow:var(--ring)}
+
+  /* ── Phase 3 · header cluster (42px) ── */
+  header{display:flex;align-items:center;gap:8px;height:42px;padding:10px 16px;background:var(--bg-page);background:color-mix(in srgb,var(--bg-page) 86%,transparent);-webkit-backdrop-filter:blur(14px) saturate(1.4);backdrop-filter:blur(14px) saturate(1.4);border-bottom:1px solid var(--line-hairline);position:sticky;top:0;z-index:5}
+  @supports not (backdrop-filter:blur(1px)){header{background:var(--bg-page)}}
+  header .brand{display:flex;align-items:center;gap:8px;min-width:0}
+  header .logo{width:24px;height:24px;flex:none;border-radius:var(--r-sm);background:var(--logo-bg);display:grid;place-items:center;box-shadow:var(--logo-shadow)}
+  header .logo svg{display:block}
+  header h1{font-size:var(--fs-brand);margin:0;font-weight:590;letter-spacing:-.01em;white-space:nowrap}
+  #pill{display:flex;align-items:center;gap:6px;flex:1;min-width:0;height:24px;padding:0 10px 0 8px;font-size:var(--fs-small);font-weight:510;color:var(--ink-2);background:var(--bg-sunken);border:1px solid var(--line-hairline);border-radius:var(--r-pill);box-shadow:var(--well-shade)}
+  #pill span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  #dot{width:7px;height:7px;border-radius:50%;background:var(--bad);flex:none;box-shadow:0 0 0 3px var(--dot-halo);transition:background-color var(--dur-tint) var(--ease-tint)}
+  #conn{white-space:nowrap}
+  #power{position:relative;display:flex;align-items:center;flex:none;width:118px;height:26px;padding:0 0 0 27px;border:1px solid var(--power-on-line);border-radius:var(--r-pill);background-color:var(--bg-sunken);background-image:var(--power-on-wash);box-shadow:var(--power-shade);color:var(--ok);font-family:var(--font-ui);font-size:10px;font-weight:590;line-height:1;letter-spacing:.04em;text-align:left;cursor:pointer;transition:color var(--dur-tint) var(--ease-tint),border-color var(--dur-tint) var(--ease-tint),filter var(--dur-tint) var(--ease-tint),transform var(--dur-press) var(--ease-snap)}
+  #power.off{background-image:var(--power-off-wash);border-color:var(--power-off-line);color:var(--bad)}
+  #power::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:var(--knob);box-shadow:var(--knob-shadow);transition:transform var(--dur-pop) var(--ease-spring)}
+  #power:not(.off)::after{transform:translateX(92px)}
+  #power:hover{filter:brightness(1.06)}
+  #power:active{transform:scale(.97)}
+  #power:focus-visible{outline:0;box-shadow:var(--ring)}
+
+  /* ── Phase 4 · nav (34px) + wash badges ── */
+  nav{display:flex;flex-direction:column;gap:0;padding:0;background:var(--bg-page);border-bottom:1px solid var(--line-hairline);position:relative}
+  .arearow,.subrow{display:flex;gap:2px;padding:0 12px}
+  .subrow[hidden]{display:none}
+  .subrow button[hidden]{display:none}
+  nav button{flex:1;position:relative;border:0;background:none;padding:9px 0 8px;font-family:var(--font-ui);font-size:11.5px;font-weight:510;line-height:16px;color:var(--mut);cursor:pointer;border-radius:6px 6px 0 0;white-space:nowrap;transition:color var(--dur-tint) var(--ease-tint),background var(--dur-tint) var(--ease-tint)}
+  nav button:hover{color:var(--ink-2);background:var(--hover-wash)}
+  nav button.on{color:var(--ink);font-weight:590}
+  nav button.on::after{content:"";position:absolute;left:10px;right:10px;bottom:0;height:2px;border-radius:2px;background:var(--acc);box-shadow:0 0 10px var(--acc-soft);transform-origin:center;animation:tab-in var(--dur-pop) var(--ease-out)}
+  .badge{position:absolute;top:4px;right:8px;min-width:14px;height:14px;padding:0 4px;border-radius:var(--r-pill);background:var(--acc-soft);color:var(--acc-hover);box-shadow:0 0 0 1px var(--acc-wash);font-family:var(--font-ui);font-size:var(--fs-micro);font-weight:590;line-height:14px;font-variant-numeric:tabular-nums;display:none;text-align:center}
+  .badge.show{display:block;animation:badge-pop var(--dur-pop) var(--ease-spring)}
+
+  /* ── Phase 5a · main canvas + section entrance ── */
+  main{padding:16px;max-height:488px;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent}
+  main::-webkit-scrollbar{width:10px}
+  main::-webkit-scrollbar-track{background:transparent}
+  main::-webkit-scrollbar-thumb{background-color:var(--line-strong);border:3px solid transparent;background-clip:padding-box;border-radius:var(--r-pill)}
   section{display:none}
-  section.on{display:block}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--rad);padding:11px;margin-bottom:10px}
-  .card h2{font-size:11px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.6px;color:var(--mut)}
-  label{display:block;font-size:11px;color:var(--mut);margin:9px 0 3px}
-  input,select,textarea{width:100%;padding:7px 8px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink);font:inherit;font-size:12px}
-  textarea{min-height:54px;resize:vertical}
-  .row{display:flex;gap:8px}.row>*{flex:1}
-  .chk{display:flex;align-items:center;gap:7px;margin-top:9px;font-size:12px;color:var(--ink)}
-  .chk input{width:auto}
-  .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:6px}
-  .seg button{flex:1;border:0;background:var(--card);padding:7px;font:inherit;font-size:12px;color:var(--mut);cursor:pointer}
-  .seg button.on{background:var(--acc);color:#fff;font-weight:600}
-  .btn{border:0;border-radius:8px;padding:9px 10px;font:inherit;font-weight:700;cursor:pointer;color:#fff;background:var(--acc);width:100%}
-  .btn.sec{background:var(--mut)}
-  .btn.stop{background:var(--bad)}
-  .btn:disabled{opacity:.5;cursor:default}
-  .btnrow{display:flex;gap:8px;margin-top:10px}
-  .status{font-size:12px;margin-top:9px;color:var(--mut);white-space:pre-wrap}
-  .bar{height:7px;border-radius:5px;background:var(--line);overflow:hidden;margin-top:10px;display:none}
-  .bar.show{display:block}
-  .bar>i{display:block;height:100%;width:0;background:var(--acc);transition:width .3s}
-  ul.res{list-style:none;margin:8px 0 0;padding:0;font-size:12px}
-  ul.res li{padding:4px 0;border-top:1px solid var(--line);display:flex;gap:6px;align-items:flex-start}
-  ul.res li:first-child{border-top:0}
+  section.on{display:block;animation:sec-in var(--dur-enter) var(--ease-out)}
+  #m_post,#m_text{animation:sec-in var(--dur-enter) var(--ease-out)}
+  @keyframes sec-in{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+  @keyframes fade-in{from{opacity:0}to{opacity:1}}
+  @keyframes tab-in{from{transform:scaleX(.35);opacity:0}to{transform:scaleX(1);opacity:1}}
+  @keyframes badge-pop{0%{transform:scale(.6);opacity:0}70%{transform:scale(1.06)}100%{transform:scale(1);opacity:1}}
+
+  /* ── Phase 5b · cards + hairline section rule + danger ── */
+  .card{background:var(--card-bg);border:1px solid var(--line-hairline);border-radius:var(--r-card);padding:16px;margin-bottom:12px;box-shadow:var(--card-shadow)}
+  .card h2{display:flex;align-items:center;gap:8px;font-size:var(--fs-h2);font-weight:590;letter-spacing:.12em;text-transform:uppercase;color:var(--mut);margin:0 0 10px}
+  .card h2::after{content:"";flex:1;height:1px;background:var(--line-hairline)}
+  .card.danger{border-color:var(--danger-line);background:var(--danger-card-bg)}
+  .card.danger h2{color:var(--bad)}
+
+  /* ── Phase 5c · labels + fields ── */
+  label{display:block;font-size:var(--fs-label);font-weight:510;letter-spacing:.01em;color:var(--mut);margin:10px 0 5px}
+  .row{display:flex;gap:9px}
+  .row>*{flex:1;min-width:0}
+  .chk{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:510;color:var(--ink-2);margin-top:12px;cursor:pointer}
+  .chk input{width:14px;height:14px;min-height:0;accent-color:var(--acc);margin:0}
+  input,select,textarea{width:100%;min-height:30px;padding:7px 10px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg-sunken);color:var(--ink);font-family:var(--font-ui);font-size:12px;line-height:1.45;box-shadow:var(--well-shade);transition:border-color var(--dur-tint) var(--ease-tint),box-shadow var(--dur-tint) var(--ease-tint)}
+  input:hover,select:hover,textarea:hover{border-color:var(--line-strong)}
+  input:focus,select:focus,textarea:focus{outline:0;border-color:var(--acc);box-shadow:var(--ring)}
+  input::placeholder,textarea::placeholder{color:var(--ink-3)}
+  select{appearance:none;-webkit-appearance:none;padding-right:26px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23686d76' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center}
+  option{background:var(--bg-elevated);color:var(--ink)}
+  textarea{min-height:60px;resize:vertical;line-height:1.5}
+  .pubmeta{display:flex;justify-content:space-between;gap:8px;margin-top:5px;color:var(--ink-3);font-size:var(--fs-small);line-height:1.4}
+  .preview{margin-top:10px;padding:10px 12px;min-height:58px;max-height:170px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid var(--line-hairline);border-radius:var(--r-sm);background:var(--bg-sunken);box-shadow:var(--well-shade);color:var(--ink-2);font-size:12px;line-height:1.5}
+  .preview.ok{color:var(--ink)}
+  .preview.bad{color:var(--bad)}
+  .smeta{margin-top:7px;font-size:11.5px;font-weight:560;line-height:1.4;letter-spacing:.01em}
+  .smeta[hidden]{display:none}
+  details.sched{margin-top:12px;border-top:1px solid var(--line-hairline);padding-top:10px}
+  details.sched>summary{cursor:pointer;font-size:var(--fs-small);font-weight:510;color:var(--mut);list-style:none;display:flex;align-items:center;gap:6px;padding:2px 0}
+  details.sched>summary::-webkit-details-marker{display:none}
+  details.sched>summary::before{content:"›";font-size:15px;line-height:1;transition:transform var(--dur-tint) var(--ease-tint)}
+  details.sched[open]>summary::before{transform:rotate(90deg)}
+  details.sched>summary:hover{color:var(--ink-2)}
+  @media (prefers-color-scheme:dark){
+    select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238a8f98' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")}
+  }
+
+  /* ── Phase 5d · segmented control (Double-Bezel) + buttons + bar ── */
+  .seg{display:flex;gap:2px;padding:2px;background:var(--bg-sunken);border:1px solid var(--line-hairline);border-radius:var(--r-md);box-shadow:var(--well-shade);margin-bottom:8px}
+  .seg button{flex:1;border:0;border-radius:var(--r-sm);padding:6px;font-family:var(--font-ui);font-size:12px;font-weight:510;color:var(--mut);background:none;cursor:pointer;transition:color var(--dur-tint) var(--ease-tint),background var(--dur-tint) var(--ease-tint)}
+  .seg button:hover{color:var(--ink-2);background:var(--hover-wash)}
+  .seg button.on{background:var(--bg-elevated);color:var(--ink);font-weight:590;box-shadow:0 0 0 1px var(--line-hairline),var(--card-shadow)}
+  .btn{width:100%;border:0;border-radius:var(--r-sm);padding:9px 12px;font-family:var(--font-ui);font-size:var(--fs-btn);font-weight:590;line-height:1.4;letter-spacing:.01em;cursor:pointer;color:var(--on-acc);background:var(--grad-acc);box-shadow:var(--btn-shadow);transition:filter var(--dur-tint) var(--ease-tint),transform var(--dur-press) var(--ease-snap),box-shadow var(--dur-tint) var(--ease-tint)}
+  .btn:hover{filter:brightness(1.1)}
+  .btn:active{transform:translateY(.5px) scale(.985)}
+  .btn:disabled{opacity:.45;filter:saturate(.6);cursor:default;transform:none}
+  .btn.sec{background:var(--btn-sec-bg);color:var(--ink-2);box-shadow:inset 0 0 0 1px var(--line-hairline)}
+  .btn.sec:hover{background:var(--btn-sec-bg-hover);color:var(--ink);filter:none}
+  .btn.stop{background:var(--bad-soft);color:var(--bad);box-shadow:inset 0 0 0 1px var(--btn-stop-ring)}
+  .btn.stop:hover{background:var(--btn-stop-bg-hover);filter:none}
+  .btnrow{display:flex;gap:8px;margin-top:12px}
+  .bar{height:5px;border-radius:var(--r-pill);background:var(--line-hairline);overflow:hidden;margin-top:11px;display:none}
+  .bar.show{display:block;animation:fade-in var(--dur-enter) var(--ease-out)}
+  .bar>i{display:block;height:100%;width:0;background:var(--grad-bar);border-radius:inherit;box-shadow:0 0 8px var(--acc-soft);transition:width var(--dur-bar) var(--ease-out)}
+
+  /* ── Phase 5e · label picker (Compartir · Etiquetas) ── */
+  .picks{margin-bottom:10px}
+  .picks-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px}
+  .picks-t{font-size:var(--fs-label);font-weight:510;letter-spacing:.01em;color:var(--mut);margin:0}
+  .picks-meta{font-size:var(--fs-small);color:var(--mut);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .picks-tools{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+  .picks-tools input{flex:1;min-width:0;min-height:26px;padding:4px 9px;font-size:var(--fs-small)}
+  .picks-btn{flex:none;border:0;border-radius:var(--r-sm);padding:8px 9px;font-family:var(--font-ui);font-size:10.5px;font-weight:510;line-height:1;letter-spacing:.01em;color:var(--ink-2);background:var(--btn-sec-bg);box-shadow:inset 0 0 0 1px var(--line-hairline);cursor:pointer;transition:background var(--dur-tint) var(--ease-tint),color var(--dur-tint) var(--ease-tint),transform var(--dur-press) var(--ease-snap)}
+  .picks-btn:hover{background:var(--btn-sec-bg-hover);color:var(--ink)}
+  .picks-btn:active{transform:translateY(.5px) scale(.985)}
+  .picks-row{display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start}
+  .picks.expanded .picks-row{max-height:120px;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent}
+  .picks.expanded .picks-row::-webkit-scrollbar{width:8px}
+  .picks.expanded .picks-row::-webkit-scrollbar-track{background:transparent}
+  .picks.expanded .picks-row::-webkit-scrollbar-thumb{background-color:var(--line-strong);border:2px solid transparent;background-clip:padding-box;border-radius:var(--r-pill)}
+  .chip{display:inline-flex;align-items:center;gap:6px;max-width:100%;border:1px solid var(--line-hairline);border-radius:var(--r-pill);padding:3px 9px;font-family:var(--font-ui);font-size:var(--fs-small);font-weight:510;line-height:1.5;color:var(--ink-2);background:var(--bg-sunken);box-shadow:var(--well-shade);cursor:pointer;transition:background-color var(--dur-tint) var(--ease-tint),border-color var(--dur-tint) var(--ease-tint),color var(--dur-tint) var(--ease-tint),box-shadow var(--dur-tint) var(--ease-tint),transform var(--dur-press) var(--ease-snap)}
+  .chip:hover{border-color:var(--line-strong);color:var(--ink)}
+  .chip:active{transform:translateY(.5px)}
+  .chip.on{background:var(--acc-soft);border-color:transparent;color:var(--acc-hover);box-shadow:0 0 0 1px var(--acc-wash)}
+  .chip:disabled{opacity:.45;filter:saturate(.6);cursor:default;transform:none}
+  .chip:focus-visible{outline:0;box-shadow:var(--ring)}
+  .chip-l{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chip-c{flex:none;font-size:10px;font-weight:510;line-height:1.5;color:var(--ink-3);font-variant-numeric:tabular-nums}
+  .chip.on .chip-c{color:var(--acc-hover);opacity:.72}
+  .picks-none{font-size:var(--fs-small);color:var(--ink-3);padding:1px 0}
+  #picksclear{display:none}
+  .picks.has-sel #picksclear{display:inline-block}
+  .picks.empty .picks-tools{display:none}
+
+  /* ── Phase 6 · lists, status, console, alerts, danger ── */
+  .status{font-size:12px;line-height:1.6;color:var(--ink-2);white-space:pre-wrap;letter-spacing:-.005em;font-variant-numeric:tabular-nums;margin-top:10px}
+  ul.res{list-style:none;margin:10px 0 0;padding:0;font-size:12px;display:flex;flex-direction:column;gap:6px}
+  ul.res li{padding:7px 9px;gap:8px;border:1px solid var(--line-hairline);border-radius:var(--r-md);display:flex;align-items:center;background:var(--bg-sunken);box-shadow:var(--well-shade);font-size:12px;color:var(--ink-2);line-height:1.4}
+  ul.res li>span:not(.ic){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  ul.res li .ic{flex:none;width:16px;height:16px;border-radius:var(--r-pill);display:grid;place-items:center;font-size:9px;font-weight:590}
+  ul.res li .ic.ok{background:var(--ok-soft);color:var(--ok)}
+  ul.res li .ic.bad{background:var(--bad-soft);color:var(--bad)}
+  ul.res li .ic.warn{background:var(--warn-soft);color:var(--warn)}
+  ul.res li button{flex:none;width:24px;height:24px;padding:0;border-radius:var(--r-sm);font-size:11px;line-height:1;display:grid;place-items:center}
+  ul.res li.hint{border:0;background:transparent;box-shadow:none;color:var(--ink-3);font-size:11px;justify-content:center;padding:8px 2px}
   .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
-  details.log{margin-top:10px}
-  details.log summary{cursor:pointer;font-size:11px;color:var(--acc);user-select:none}
-  pre.console{margin:7px 0 0;background:#0b0f16;color:#c9d1d9;border-radius:8px;padding:8px;font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;max-height:190px;overflow:auto;white-space:pre-wrap;word-break:break-word}
-  .hint{font-size:11px;color:var(--mut);margin:0 0 6px}
+  .hint{font-size:11px;color:var(--mut);margin:0 0 6px;line-height:1.5}
+  .hint b{font-weight:590;color:var(--ink-2)}
+  details.log{margin-top:12px;border:1px solid var(--line-hairline);border-radius:var(--r-md);overflow:hidden;background:var(--bg-sunken)}
+  details.log summary{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;font-weight:510;color:var(--mut);user-select:none;padding:8px 10px;list-style:none;transition:color var(--dur-tint) var(--ease-tint),background var(--dur-tint) var(--ease-tint)}
+  details.log summary::-webkit-details-marker{display:none}
+  details.log summary:hover{color:var(--ink-2);background:var(--hover-wash)}
+  details.log[open] summary{border-bottom:1px solid var(--line-hairline)}
+  details.log summary::before{content:"";width:7px;height:7px;border-style:solid;border-color:var(--ink-3);border-width:0 1.5px 1.5px 0;transform:rotate(-45deg);transition:transform var(--dur-enter) var(--ease-out);flex:none}
+  details.log[open] summary::before{transform:rotate(45deg)}
+  pre.console{margin:0;background:var(--console-bg);color:var(--console-ink);padding:10px;font-family:var(--font-mono);font-size:var(--fs-console);font-weight:400;line-height:1.6;max-height:190px;overflow:auto;white-space:pre-wrap;word-break:break-word;box-shadow:var(--console-shade);scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent}
+  pre.console::-webkit-scrollbar{width:8px;height:8px}
+  pre.console::-webkit-scrollbar-track{background:transparent}
+  pre.console::-webkit-scrollbar-thumb{background-color:var(--line-strong);border:2px solid transparent;background-clip:padding-box;border-radius:var(--r-pill)}
+  details[open] pre.console{animation:fade-in var(--dur-enter) var(--ease-out)}
+  #aerr{display:block;margin:10px 0 0;padding:8px 10px;border:1px solid var(--alert-line);border-radius:var(--r-md);background:var(--bad-soft);color:var(--bad);font-size:11px;font-weight:510;line-height:1.5}
+
+  /* ── Phase 8 · Perfil de Chrome · gestor profile_manager (127.0.0.1:8798) ──
+     Reusa los materiales existentes: fila = pozo --bg-sunken + hairline, activa =
+     material de badge (.chip.on), etiqueta "Recomendado" = wash --ok. Sin bordes
+     de color laterales: el estado va en texto (.pm-st), nunca en una franja. */
+  .pm-top{display:flex;align-items:flex-start;gap:8px}
+  .pm-cur{flex:1;min-width:0}
+  .pm-k{display:block;font-size:var(--fs-micro);font-weight:590;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+  .pm-cur-name{display:block;font-size:14px;font-weight:590;line-height:1.4;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pm-health{font-size:var(--fs-small);line-height:1.5;color:var(--mut);margin:6px 0 0}
+  .pm-msg{margin:9px 0 0;padding:9px 11px;border-radius:var(--r-md);font-size:12px;font-weight:510;line-height:1.5}
+  .pm-msg[hidden]{display:none}
+  .pm-msg.ok{background:var(--ok-soft);color:var(--ok)}
+  .pm-msg.warn{background:var(--warn-soft);color:var(--warn)}
+  .pm-msg.bad{background:var(--bad-soft);color:var(--bad)}
+  .pm-msg-t{display:block}
+  .pm-msg .picks-btn{margin-top:7px;color:var(--ink-2);background:var(--bg-surface)}
+  .pm-list{display:flex;flex-direction:column;gap:4px;margin-top:10px}
+  .pm-g{font-size:var(--fs-micro);font-weight:590;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin:8px 0 1px;font-variant-numeric:tabular-nums}
+  .pm-g:first-child{margin-top:0}
+  .pm-row{display:flex;align-items:center;gap:9px;width:100%;padding:9px 11px;border:1px solid var(--line-hairline);border-radius:var(--r-md);background:var(--bg-sunken);box-shadow:var(--well-shade);font-family:var(--font-ui);text-align:left;cursor:pointer;transition:border-color var(--dur-tint) var(--ease-tint),background-color var(--dur-tint) var(--ease-tint),color var(--dur-tint) var(--ease-tint),box-shadow var(--dur-tint) var(--ease-tint),transform var(--dur-press) var(--ease-snap)}
+  .pm-row:hover{border-color:var(--line-strong)}
+  .pm-row:active{transform:translateY(.5px)}
+  .pm-row.cur{background:var(--acc-soft);border-color:transparent;box-shadow:0 0 0 1px var(--acc-wash);cursor:default}
+  .pm-row:disabled{opacity:.5;filter:saturate(.7);cursor:default;transform:none}
+  .pm-row.cur:disabled{opacity:1;filter:none}
+  .pm-row:focus-visible{outline:0;box-shadow:var(--ring)}
+  .pm-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:0}
+  .pm-name{font-size:13.5px;font-weight:510;line-height:1.45;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pm-row.cur .pm-name{color:var(--acc-hover)}
+  .pm-sub{font-size:11px;line-height:1.45;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
+  .pm-st{flex:none;font-size:11px;font-weight:590;line-height:1.4;color:var(--mut);white-space:nowrap}
+  .pm-row.cur .pm-st{color:var(--acc-hover)}
+  .pm-tag{display:inline-block;margin-left:6px;padding:0 6px;border-radius:var(--r-pill);background:var(--ok-soft);color:var(--ok);font-size:10px;font-weight:590;line-height:15px;letter-spacing:.02em;vertical-align:1px}
+  .pm-empty{font-size:11.5px;color:var(--ink-3);padding:6px 0;line-height:1.5}
+  .pm-empty.bad{color:var(--bad)}
+  @media (max-width:400px){
+    main{padding:10px}
+    .card{padding:12px}
+    .pm-row{padding:7px 8px}
+    .pm-list{gap:3px}
+  }
+
+  /* ── Phase 7 · reduced motion (reduce, not remove) ── */
+  @media (prefers-reduced-motion:reduce){
+    .badge.show{animation:none}
+    nav button.on::after{animation:none}
+    #power::after,.bar>i,details.log summary::before{transition:none}
+    section.on{animation:sec-in-r 120ms linear}
+    #m_post,#m_text{animation:sec-in-r 120ms linear}
+    @keyframes sec-in-r{from{opacity:0}to{opacity:1}}
+  }
 </style>
 </head>
 <body>
 <header>
-  <span id="dot"></span><h1>CXT</h1><span id="conn">conectando…</span>
+  <div class="brand"><span class="logo"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M9.6 3.4a4.35 4.35 0 1 0 .01 5.2" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round"/></svg></span><h1>CXT</h1></div>
+  <div id="pill"><span id="dot"></span><span id="conn">conectando…</span></div>
   <button id="power">● …</button>
 </header>
 <nav>
-  <button data-tab="estado" class="on">Estado<span class="badge" id="b_estado"></span></button>
-  <button data-tab="publicar">Publicar<span class="badge" id="b_pub"></span></button>
-  <button data-tab="compartir">Compartir<span class="badge" id="b_share"></span></button>
-  <button data-tab="comentar">Comentar<span class="badge" id="b_com"></span></button>
-  <button data-tab="auto">Automatización<span class="badge" id="b_auto"></span></button>
-  <button data-tab="ajustes">Ajustes<span class="badge" id="b_grp"></span></button>
+  <div class="arearow">
+    <button type="button" data-area="estado">Estado</button>
+    <button type="button" data-area="facebook">Facebook</button>
+    <button type="button" data-area="scraping">Scraping<span class="badge" id="b_scraping"></span></button>
+    <button type="button" data-area="ajustes">Ajustes</button>
+  </div>
+  <div class="subrow">
+    <button type="button" data-tab="estado" class="on">Estado<span class="badge" id="b_estado"></span></button>
+    <button type="button" data-tab="publicar">Publicar<span class="badge" id="b_pub"></span></button>
+    <button type="button" data-tab="compartir">Compartir<span class="badge" id="b_share"></span></button>
+    <button type="button" data-tab="comentar">Comentar<span class="badge" id="b_com"></span></button>
+    <button type="button" data-tab="auto">Auto<span class="badge" id="b_auto"></span></button>
+    <button type="button" data-tab="grupos">Grupos<span class="badge" id="b_grp"></span></button>
+    <button type="button" data-tab="ajustes">Ajustes</button>
+  </div>
 </nav>
 <main>
   <section id="t_estado" class="on">
+    <div class="card">
+      <h2>Perfil de Chrome</h2>
+      <div class="pm-top">
+        <div class="pm-cur">
+          <span class="pm-k">Actual</span>
+          <span class="pm-cur-name" id="pm_current">—</span>
+        </div>
+        <button type="button" class="picks-btn" id="pm_refresh">Actualizar</button>
+      </div>
+      <p class="pm-health" id="pm_health">consultando gestor…</p>
+      <div class="pm-msg" id="pm_msg" role="status" aria-live="polite" hidden></div>
+      <div class="pm-list" id="pm_list"></div>
+    </div>
+    <div class="card">
+      <h2>Última ejecución</h2>
+      <div id="pm_last" class="status" aria-live="polite">sin datos</div>
+    </div>
     <div class="card">
       <h2>Resumen</h2>
       <div id="status" class="status">cargando…</div>
@@ -85,19 +388,33 @@
   <section id="t_publicar">
     <div class="card">
       <h2>Publicar en tu muro</h2>
-      <p class="hint">Escribe o deja que se use el titular del día, y prográmalo cada X minutos.</p>
-      <div class="row">
-        <div><label for="sint">Cada</label>
-          <select id="sint"><option value="3">3 min</option><option value="5">5 min</option><option value="10">10 min</option><option value="0.1">6 s (prueba)</option></select></div>
-        <div><label for="scount">Cantidad</label><input id="scount" type="number" min="1" value="1"></div>
-      </div>
-      <label for="stopic">Tema</label>
-      <select id="stopic"><option value="auto">auto (titulares del día)</option><option value="fixed">texto fijo</option></select>
-      <textarea id="stext" placeholder="Texto fijo (si eliges 'texto fijo')"></textarea>
-      <div class="bar" id="bar_pub"><i></i></div>
-      <div class="btnrow"><button id="sstart" class="btn">INICIAR</button><button id="sstop" class="btn stop">DETENER</button></div>
+      <p class="hint">Genera una vista previa, revísala y publica ahora o prográmala cada X minutos.</p>
+      <div class="btnrow"><button id="sdesk" class="btn sec" type="button">ABRIR MESA EDITORIAL</button></div>
+      <label for="stopic">Modo</label>
+      <select id="stopic">
+        <option value="editorial" selected>Editorial (investiga + sello)</option>
+        <option value="ai">IA rápida (sin sello)</option>
+        <option value="fixed">Texto fijo</option>
+        <option value="auto">Titulares del día</option>
+      </select>
+      <label for="stext">Texto o instrucción</label>
+      <textarea id="stext" rows="3" maxlength="2000" placeholder="Ej.: qué está pasando en el mundo, con contexto para Playa del Carmen"></textarea>
+      <div class="pubmeta"><span id="stextcnt">0 / 2000</span><span id="spubhint">Investiga fuentes y solo habilita la publicación con sello verde.</span></div>
+      <div class="btnrow"><button id="spregen" class="btn sec">GENERAR VISTA PREVIA</button><button id="spnow" class="btn">PUBLICAR AHORA</button></div>
+      <div id="spreview" class="preview" aria-live="polite">Sin vista previa. Genera una para revisar el texto antes de publicar.</div>
+      <div id="spmeta" class="smeta" aria-live="polite" hidden></div>
       <div id="sstatus" class="status"></div>
-      <details class="log"><summary>Ver proceso en vivo</summary><pre class="console" id="log_pub">(sin datos)</pre></details>
+      <details class="sched" id="spub_sched">
+        <summary>Programar automáticamente</summary>
+        <div class="row">
+          <div><label for="sint">Cada</label>
+            <select id="sint"><option value="3">3 min</option><option value="5">5 min</option><option value="10">10 min</option><option value="60">1 hora</option><option value="360">6 horas</option><option value="720">12 horas</option><option value="1440">24 horas</option><option value="0.1">6 s (prueba)</option></select></div>
+          <div><label for="scount">Cantidad</label><input id="scount" type="number" min="1" value="1"></div>
+        </div>
+        <div class="bar" id="bar_pub"><i></i></div>
+        <div class="btnrow"><button id="sstart" class="btn">PROGRAMAR</button><button id="sstop" class="btn stop">DETENER</button></div>
+        <details class="log"><summary>Ver proceso en vivo</summary><pre class="console" id="log_pub">(sin datos)</pre></details>
+      </details>
     </div>
   </section>
 
@@ -109,6 +426,19 @@
         <button data-mode="text">Texto nuevo</button>
       </div>
 
+      <div class="picks" id="picks">
+        <div class="picks-head">
+          <label class="picks-t" for="picksq">Etiquetas</label>
+          <span class="picks-meta" id="picksmeta"></span>
+        </div>
+        <div class="picks-tools">
+          <input id="picksq" type="search" placeholder="buscar etiqueta…" autocomplete="off" spellcheck="false">
+          <button type="button" class="picks-btn" id="picksall" hidden>ver todas</button>
+          <button type="button" class="picks-btn" id="picksclear">limpiar</button>
+        </div>
+        <div class="picks-row" id="picksrow"></div>
+      </div>
+
       <div id="m_post">
         <p class="hint">Comparte un post tuyo (link) a los grupos que elijas.</p>
         <label for="purl">Link del post</label><input id="purl" placeholder="https://www.facebook.com/share/p/…">
@@ -118,7 +448,8 @@
           <div><label for="plimit">Límite</label><input id="plimit" type="number" min="0" value="3"></div>
         </div>
         <label for="ptext">Texto extra (opcional)</label><input id="ptext">
-        <label class="chk"><input id="pdry" type="checkbox" checked>Simulación (no publica)</label>
+        <label class="chk"><input id="pdry" type="checkbox">Simulación (no publica)</label>
+        <label class="chk"><input id="pfast" type="checkbox">Rápido (sin esperas anti-ban)</label>
         <div class="bar" id="bar_sharepost"><i></i></div>
         <div class="btnrow"><button id="pstart" class="btn">COMPARTIR POST</button><button id="pstop" class="btn stop">DETENER</button></div>
         <div id="pstatus" class="status"></div>
@@ -133,7 +464,7 @@
           <div><label for="glimit">Límite</label><input id="glimit" type="number" min="0" value="3"></div>
         </div>
         <label for="gtext">Texto</label><textarea id="gtext"></textarea>
-        <label class="chk"><input id="gdry" type="checkbox" checked>Simulación (no publica)</label>
+        <label class="chk"><input id="gdry" type="checkbox">Simulación (no publica)</label>
         <div class="bar" id="bar_share"><i></i></div>
         <div class="btnrow"><button id="gstart" class="btn">COMPARTIR</button><button id="gstop" class="btn stop">DETENER</button></div>
         <div id="gstatus" class="status"></div>
@@ -154,7 +485,7 @@
         <div><label for="ccount">Cantidad</label><input id="ccount" type="number" min="1" value="1"></div>
       </div>
       <label for="ctext">Texto (si es fijo)</label><textarea id="ctext"></textarea>
-      <label class="chk"><input id="cdry" type="checkbox" checked>Simulación (no publica)</label>
+      <label class="chk"><input id="cdry" type="checkbox">Simulación (no publica)</label>
       <div class="bar" id="bar_com"><i></i></div>
       <div class="btnrow"><button id="cstart" class="btn">COMENTAR</button><button id="cstop" class="btn stop">DETENER</button></div>
       <div id="cstatus" class="status"></div>
@@ -169,23 +500,50 @@
       <p class="hint">Cola de publicaciones programadas: se comparten solas en los grupos cuando les toca.</p>
       <div id="astatus" class="status">cargando…</div>
       <p class="hint" id="aerr" style="display:none"></p>
-      <div class="row">
-        <label for="aintv">Ritmo entre envíos</label>
-        <select id="aintv">
-          <option value="">Automático</option>
-          <option value="10">Rápido (10 min)</option>
-          <option value="15">Normal (15 min)</option>
-          <option value="30">Lento (30 min)</option>
-          <option value="60">Muy lento (60 min)</option>
-        </select>
-      </div>
-      <div class="btnrow"><button id="apause" class="btn">PAUSAR</button><button id="anext" class="btn">SIGUIENTE</button><button id="aclear" class="btn sec">LIMPIAR COLA</button></div>
-      <p class="hint"><b>Cola</b></p>
+      <label for="aintv">Ritmo entre envíos</label>
+      <select id="aintv">
+        <option value="">Automático</option>
+        <option value="10">Rápido (10 min)</option>
+        <option value="15">Normal (15 min)</option>
+        <option value="30">Lento (30 min)</option>
+        <option value="60">Muy lento (60 min)</option>
+      </select>
+      <div class="btnrow"><button id="apause" class="btn">PAUSAR</button><button id="anext" class="btn sec">SIGUIENTE</button></div>
+      <p class="hint" style="margin-top:12px"><b>Cola</b></p>
       <ul id="aitems" class="res"></ul>
-      <p class="hint"><b>Últimos resultados</b></p>
+      <div class="btnrow"><button id="arety" class="btn sec">REINTENTAR FALLIDOS</button><button id="aclear" class="btn sec">LIMPIAR COLA</button></div>
+      <p class="hint" style="margin-top:12px"><b>Últimos resultados</b></p>
       <ul id="ares" class="res"></ul>
       <div class="btnrow"><button id="alog" class="btn sec">LIMPIAR LOG</button></div>
       <details class="log"><summary>Ver proceso en vivo</summary><pre class="console" id="log_auto">(sin datos)</pre></details>
+    </div>
+  </section>
+
+  <section id="t_grupos">
+    <div class="card">
+      <h2>Grupos escaneados</h2>
+      <div id="grstatus" class="status">sin escanear</div>
+      <div class="bar" id="bar_grp"><i></i></div>
+      <div class="btnrow"><button id="grscan" class="btn">ESCANEAR GRUPOS</button></div>
+      <details class="log"><summary>Ver proceso en vivo</summary><pre class="console" id="log_grp">(sin datos)</pre></details>
+    </div>
+  </section>
+
+  <section id="t_scraping">
+    <div class="card">
+      <h2>Scraping</h2>
+      <label for="surl">URL (vacío = pestaña activa)</label><input id="surl" type="url" placeholder="https://…">
+      <label for="ssel">Selector CSS (opcional)</label><input id="ssel" placeholder="main, article…">
+      <label class="chk"><input id="s_main" type="checkbox" checked> Sólo área principal</label>
+      <p class="hint">Formatos a exportar</p>
+      <label class="chk"><input id="sf_md" type="checkbox" checked> Markdown (.md)</label>
+      <label class="chk"><input id="sf_txt" type="checkbox" checked> Texto (.txt)</label>
+      <label class="chk"><input id="sf_csv" type="checkbox"> Tablas (.csv)</label>
+      <label class="chk"><input id="sf_pdf" type="checkbox"> PDF</label>
+      <div class="bar" id="bar_scraping"><i></i></div>
+      <div class="btnrow"><button id="s_run" class="btn">EXTRAER</button><button id="s_exp" class="btn sec">EXPORTAR</button></div>
+      <ul id="scraping_res" class="res"></ul>
+      <details class="log"><summary>Ver proceso en vivo</summary><pre class="console" id="log_scraping">(sin datos)</pre></details>
     </div>
   </section>
 
@@ -194,21 +552,16 @@
       <h2>Conexión</h2>
       <label for="server">Servidor</label><input id="server" placeholder="http://127.0.0.1:8799">
       <label for="token">Token (opcional)</label><input id="token" type="password">
+      <label for="manager">Gestor de perfiles</label><input id="manager" placeholder="http://127.0.0.1:8798">
+      <label for="mgrToken">Token del gestor (opcional)</label><input id="mgrToken" type="password" placeholder="profile_manager.token">
       <div class="btnrow"><button id="save" class="btn">GUARDAR</button><button id="test2" class="btn sec">PROBAR</button></div>
-    </div>
-    <div class="card">
-      <h2>Grupos escaneados</h2>
-      <div id="grstatus" class="status">sin escanear</div>
-      <div class="bar" id="bar_grp"><i></i></div>
-      <div class="btnrow"><button id="grscan" class="btn">ESCANEAR GRUPOS</button></div>
-      <details class="log"><summary>Ver proceso en vivo</summary><pre class="console" id="log_grp">(sin datos)</pre></details>
     </div>
     <div class="card">
       <h2>Logs</h2>
       <p class="hint">Borra los archivos de proceso en vivo. No afecta a la cola ni a los resultados.</p>
       <button id="logclear" class="btn sec">LIMPIAR TODOS LOS LOGS</button>
     </div>
-    <div class="card">
+    <div class="card danger">
       <h2>Peligro</h2>
       <button id="stopall2" class="btn stop">DETENER TODO</button>
     </div>

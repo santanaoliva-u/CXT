@@ -31,6 +31,16 @@ NEWS = cxtlib.resolve_script("news.sh")
 call = cxtlib.caller(CXT)
 
 
+def cdp(expr):
+    """Evalua JS en TAB (CDP); no activa la pestana."""
+    return cxtlib.cdp(CXT, TAB, expr)
+
+
+def click(x, y):
+    """Clic CDP confiable en TAB; no activa la ventana."""
+    return cxtlib.click(CXT, TAB, x, y)
+
+
 def sleep(ms):
     time.sleep(ms / 1000.0)
 
@@ -183,16 +193,9 @@ def delete_comment(text):
 
 
 def ensure_tab():
+    """Resuelve la pestana de trabajo sin activarla (no roba foco)."""
     global TAB
-    if TAB is None:
-        r = call("tabs", {})
-        for t in (r if isinstance(r, list) else []):
-            if "facebook.com" in (t.get("url") or ""):
-                TAB = t["id"]
-                break
-    if TAB is None:
-        sys.exit("no encontre pestana de Facebook (set CXT_TAB)")
-    call("tab.activate", {"tabId": TAB})
+    TAB = cxtlib.ensure_tab(CXT, TAB)
 
 
 def _norm(s):

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Global de Prueba</title>
+  <link href="https://example.test/atom"/>
+  <updated>2026-10-22T12:00:00Z</updated>
+  <entry>
+    <title>Ciudades costeras aceleran la transición energética</title>
+    <link rel="alternate" href="https://example.test/ciudades-energia"/>
+    <id>https://example.test/ciudades-energia</id>
+    <published>2026-10-22T12:00:00Z</published>
+    <updated>2026-10-22T12:00:00Z</updated>
+    <summary>Varias ciudades costeras anunciaron inversiones en energía renovable y transporte público.</summary>
+    <author><name>Redacción Global</name></author>
+  </entry>
+</feed>

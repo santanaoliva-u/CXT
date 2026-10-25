@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mesa editorial · CXT</title>
+  <link rel="stylesheet" href="editorial.css">
+</head>
+<body>
+  <div class="app">
+    <header class="masthead">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">C</span>
+        <span class="brand-copy">
+          <strong>CXT</strong>
+          <span>Mesa editorial</span>
+        </span>
+      </div>
+      <div class="masthead-rule" aria-hidden="true"></div>
+      <p class="masthead-note">Sin fuentes no hay vista previa. Sin sello no hay publicación.</p>
+      <div class="masthead-status">
+        <span id="modeBadge" class="mode-badge">Editorial</span>
+        <span id="serverPill" class="server-pill is-checking">Comprobando servidor</span>
+      </div>
+    </header>
+
+    <main class="desk">
+      <aside class="col col-assignment" aria-labelledby="assignmentTitle">
+        <div class="col-head">
+          <span class="step">01</span>
+          <div>
+            <h1 id="assignmentTitle">Asignación</h1>
+            <p>Convierte una instrucción en un contrato verificable.</p>
+          </div>
+        </div>
+
+        <form id="assignmentForm" class="panel" autocomplete="off">
+          <label class="field field-wide" for="instruction">
+            <span>Instrucción</span>
+            <textarea id="instruction" rows="4" maxlength="2000" placeholder="Ej.: qué está pasando en el mundo, con contexto para Playa del Carmen" required>qué está pasando en el mundo</textarea>
+          </label>
+          <div class="field-row">
+            <label class="field" for="mode">
+              <span>Modo</span>
+              <select id="mode">
+                <option value="editorial">Editorial</option>
+                <option value="autonomous">Autónomo</option>
+                <option value="research">Solo investigación</option>
+                <option value="ghost">Ghost</option>
+              </select>
+            </label>
+            <label class="field" for="freshness">
+              <span>Frescura (h)</span>
+              <input id="freshness" type="number" min="1" max="720" value="48">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field" for="minSources">
+              <span>Fuentes mínimas</span>
+              <input id="minSources" type="number" min="1" max="12" value="2">
+            </label>
+            <label class="field" for="maxLength">
+              <span>Máximo (caracteres)</span>
+              <input id="maxLength" type="number" min="180" max="2000" value="900">
+            </label>
+          </div>
+          <label class="field" for="tone">
+            <span>Tono</span>
+            <input id="tone" type="text" maxlength="120" placeholder="claro, humano y verificable">
+          </label>
+          <label class="field" for="audience">
+            <span>Audiencia</span>
+            <input id="audience" type="text" maxlength="120" placeholder="público general">
+          </label>
+          <label class="field" for="mustInclude">
+            <span>Debe incluir <small>separado por comas</small></span>
+            <input id="mustInclude" type="text" maxlength="400" placeholder="contexto local, una cifra verificable">
+          </label>
+          <label class="field" for="mustNot">
+            <span>No debe incluir <small>separado por comas</small></span>
+            <input id="mustNot" type="text" maxlength="400" placeholder="ataques personales, rumores">
+          </label>
+
+          <div id="formError" class="form-error" role="alert" hidden></div>
+          <div class="actions actions-stack">
+            <button id="runBtn" class="btn btn-primary" type="submit">
+              <span>Investigar y redactar</span>
+              <kbd>Ctrl ↵</kbd>
+            </button>
+            <button id="researchBtn" class="btn btn-quiet" type="button">Solo investigar</button>
+          </div>
+          <p class="form-hint">La investigación usa RSS públicos. La redacción solo ve el dossier.</p>
+        </form>
+
+        <section class="panel panel-brief" aria-labelledby="briefTitle">
+          <div class="panel-title">
+            <h2 id="briefTitle">Brief</h2>
+            <span id="briefPolicy" class="tiny">—</span>
+          </div>
+          <div id="briefBody" class="brief-body">
+            <p class="empty">El brief aparecerá después de investigar.</p>
+          </div>
+        </section>
+      </aside>
+
+      <section class="col col-draft" aria-labelledby="draftTitle">
+        <div class="col-head">
+          <span class="step">02</span>
+          <div>
+            <h1 id="draftTitle">Borrador</h1>
+            <p>La portada se escribe después de leer las fuentes.</p>
+          </div>
+        </div>
+
+        <div id="assignmentSummary" class="assignment-summary">
+          <div class="summary-line">
+            <span class="summary-label">Asignación</span>
+            <span id="summaryIntent" class="summary-value">Sin investigar</span>
+          </div>
+          <div class="summary-line">
+            <span class="summary-label">Fuentes</span>
+            <span id="summarySources" class="summary-value">—</span>
+          </div>
+          <div class="summary-line">
+            <span class="summary-label">Frescura</span>
+            <span id="summaryFreshness" class="summary-value">—</span>
+          </div>
+        </div>
+
+        <div id="angleTabs" class="angle-tabs" role="tablist" aria-label="Ángulos editoriales"></div>
+        <div id="angleThesis" class="angle-thesis">
+          <p class="empty">Los ángulos aparecerán aquí.</p>
+        </div>
+
+        <article class="post-card" aria-label="Vista previa del post">
+          <div class="post-head">
+            <span class="avatar" aria-hidden="true">C</span>
+            <div>
+              <strong>CXT · Playa del Carmen</strong>
+              <span>Ahora · <span id="postVisibility">público</span></span>
+            </div>
+            <span class="post-menu" aria-hidden="true">···</span>
+          </div>
+          <p id="postBody" class="post-body">El borrador aparecerá aquí.</p>
+          <div class="post-foot" aria-hidden="true">
+            <span>Me gusta</span><span>Comentar</span><span>Compartir</span>
+          </div>
+        </article>
+
+        <label class="field field-wide draft-field" for="draftText">
+          <span>Texto editable</span>
+          <textarea id="draftText" rows="7" maxlength="2000" placeholder="Investiga para generar un borrador."></textarea>
+        </label>
+        <div class="draft-meta">
+          <span id="charCount">0 / 2000</span>
+          <span id="draftState">Sin borrador</span>
+        </div>
+
+        <div class="actions">
+          <button id="approveBtn" class="btn btn-primary" type="button" disabled>Aprobar borrador</button>
+          <button id="verifyBtn" class="btn btn-quiet" type="button" hidden>Verificar cambios</button>
+          <button id="copyBtn" class="btn btn-quiet" type="button" disabled>Copiar texto</button>
+          <button id="publishBtn" class="btn btn-publish" type="button" disabled>Publicar</button>
+        </div>
+        <div id="draftStatus" class="inline-status" role="status" aria-live="polite"></div>
+      </section>
+
+      <aside class="col col-evidence" aria-labelledby="evidenceTitle">
+        <div class="col-head">
+          <span class="step">03</span>
+          <div>
+            <h1 id="evidenceTitle">Evidencia</h1>
+            <p>Lo que sostiene el texto, y lo que lo bloquea.</p>
+          </div>
+        </div>
+
+        <section id="stampCard" class="stamp stamp-idle" aria-labelledby="stampTitle">
+          <div class="stamp-head">
+            <span id="stampDot" class="stamp-dot" aria-hidden="true"></span>
+            <div>
+              <span class="stamp-kicker">Sello editorial</span>
+              <h2 id="stampTitle">Sin verificar</h2>
+            </div>
+          </div>
+          <p id="stampSummary" class="stamp-summary">Investiga y redacta para emitir un sello.</p>
+          <ul id="stampReasons" class="stamp-reasons"></ul>
+        </section>
+
+        <section class="panel" aria-labelledby="sourcesTitle">
+          <div class="panel-title">
+            <h2 id="sourcesTitle">Corte de fuentes</h2>
+            <span id="sourcesCount" class="tiny">0</span>
+          </div>
+          <div id="sourcesList" class="source-list">
+            <p class="empty">Aún no hay fuentes.</p>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="claimsTitle">
+          <div class="panel-title">
+            <h2 id="claimsTitle">Claims</h2>
+            <span id="claimsCount" class="tiny">0</span>
+          </div>
+          <ul id="claimsList" class="claim-list">
+            <li class="empty">Sin claims declarados.</li>
+          </ul>
+        </section>
+
+        <section class="panel" aria-labelledby="checksTitle">
+          <div class="panel-title">
+            <h2 id="checksTitle">Controles</h2>
+            <span id="checksCount" class="tiny">—</span>
+          </div>
+          <ul id="stampChecks" class="check-list"></ul>
+        </section>
+
+        <section class="panel" aria-labelledby="redTeamTitle">
+          <div class="panel-title">
+            <h2 id="redTeamTitle">Red Team</h2>
+            <span class="tiny">fallos y avisos</span>
+          </div>
+          <ul id="redTeam" class="red-team">
+            <li class="empty">Sin hallazgos.</li>
+          </ul>
+        </section>
+
+        <section class="panel" aria-labelledby="auditTitle">
+          <div class="panel-title">
+            <h2 id="auditTitle">Audit Book</h2>
+            <button id="auditRefresh" class="link-btn" type="button">Actualizar</button>
+          </div>
+          <div id="auditList" class="audit-list">
+            <p class="empty">Sin ejecuciones.</p>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <dialog id="publishDialog" class="publish-dialog">
+    <form method="dialog">
+      <span class="dialog-kicker">Confirmación</span>
+      <h2>Publicar en Facebook</h2>
+      <p>Se publicará exactamente este texto. Revisa que sea el definitivo.</p>
+      <blockquote id="publishQuote"></blockquote>
+      <div class="dialog-actions">
+        <button class="btn btn-quiet" value="cancel">Cancelar</button>
+        <button id="publishConfirm" class="btn btn-publish" value="confirm">Publicar ahora</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="editorial.js"></script>
+</body>
+</html>

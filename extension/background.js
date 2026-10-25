@@ -6,6 +6,7 @@ let lastStore = 0;
 let pollCtl = null;
 let currentLoop = null;
 let autoStatsCache = null;
+let runOpBusy = false;
 
 const processedIds = new Set();
 const PROCESSED_MAX = 100;
@@ -142,6 +143,15 @@ function scheduleDetach(tabId) {
   );
 }
 
+// Un diálogo abierto ANTES de que el debugger se enganche no emite
+// `Page.javascriptDialogOpening` (el listener aún no existía) y deja
+// `Runtime.evaluate` colgado para siempre. Se descarta antes de evaluar.
+async function dismissStaleDialog(tabId) {
+  try {
+    await chrome.debugger.sendCommand({ tabId }, "Page.handleJavaScriptDialog", { accept: true });
+  } catch (e) {}
+}
+
 async function cdp(tabId, method, params) {
   hookDialogs();
   const prev = detachTimers.get(tabId);
@@ -156,6 +166,7 @@ async function cdp(tabId, method, params) {
         pageEnabled.add(tabId);
       } catch (e) {}
     }
+    if (method === "Runtime.evaluate") await dismissStaleDialog(tabId);
     const r = await chrome.debugger.sendCommand({ tabId }, method, params || {});
     scheduleDetach(tabId);
     return r;
@@ -166,6 +177,7 @@ async function cdp(tabId, method, params) {
       await chrome.debugger.sendCommand({ tabId }, "Page.enable", {});
       pageEnabled.add(tabId);
     } catch (e2) {}
+    if (method === "Runtime.evaluate") await dismissStaleDialog(tabId);
     const r = await chrome.debugger.sendCommand({ tabId }, method, params || {});
     scheduleDetach(tabId);
     return r;
@@ -288,8 +300,67 @@ function waitLoad(tabId, timeout) {
   });
 }
 
+// Pestaña/ventana propia de automatizacion (no roba foco). El id puede morir al
+// cerrar Chrome: por eso se valida con tabs.get y se recrea si esta obsoleto.
+const AUTO_TAB_KEY = "cxt_auto_tab_id";
+const AUTO_WINDOW_KEY = "cxt_auto_window_id";
+
+async function clearAutoTabKeys() {
+  try {
+    await chrome.storage.local.remove([AUTO_TAB_KEY, AUTO_WINDOW_KEY]);
+  } catch (e) {}
+}
+
+// Devuelve {tabId, windowId} si la pestaña marcada sigue viva y es de Facebook.
+// Si no existe, esta cerrada o ya no es Facebook, limpia las claves y devuelve null.
+async function getStoredAutoTab() {
+  const s = await chrome.storage.local.get([AUTO_TAB_KEY, AUTO_WINDOW_KEY]);
+  const tabId = Number(s && s[AUTO_TAB_KEY]);
+  if (!Number.isInteger(tabId) || tabId <= 0) {
+    await clearAutoTabKeys();
+    return null;
+  }
+  let t;
+  try {
+    t = await chrome.tabs.get(tabId);
+  } catch (e) {
+    await clearAutoTabKeys();
+    return null;
+  }
+  const url = String((t && t.url) || "");
+  if (!url.toLowerCase().includes("facebook.com")) {
+    await clearAutoTabKeys();
+    return null;
+  }
+  const windowId = Number(t.windowId);
+  if (!Number.isInteger(windowId) || windowId <= 0) {
+    await clearAutoTabKeys();
+    return null;
+  }
+  // La ventana pudo cambiar de id al reiniciar Chrome: se re-guarda el real.
+  if (Number(s && s[AUTO_WINDOW_KEY]) !== windowId) {
+    try {
+      await chrome.storage.local.set({ [AUTO_WINDOW_KEY]: windowId });
+    } catch (e) {}
+  }
+  return { tabId: t.id, windowId };
+}
+
+// Receta de medicion (no publica nada):
+//   ./bin/cxt tab.ensure_auto '{}'          -> guarda tabId/windowId
+//   hyprctl activewindow -j                -> la ventana activa NO debe ser la de automatizacion
+//   ./bin/cxt eval '{"tabId":<id>,"expression":"({v:document.visibilityState,f:document.hasFocus()})"}'
+// Esperado: v === "visible" (pestaña activa dentro de su propia ventana) y f === false
+// cuando el usuario conserva el foco. En Wayland/Hyprland f puede salir true si el WM
+// enfoca la ventana nueva: eso se mide, no se asume (ver plan 2.7).
+
 async function resolveTab(args) {
   if (args && args.tabId != null) return await chrome.tabs.get(args.tabId);
+  // Automatizacion: nunca usar la pestaña activa de la ventana del usuario.
+  // Debe pasar un tabId explicito (normalmente el de tab.ensure_auto).
+  if (args && args.automation === true) {
+    throw new Error("resolveTab: automatizacion requiere tabId explicito (usa tab.ensure_auto)");
+  }
   const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!t) throw new Error("no hay pestana activa");
   return t;
@@ -313,12 +384,16 @@ async function exec(op, args) {
       }));
     }
     case "tab.new": {
+      // Compatibilidad: conserva el default del CLI (active por defecto, roba foco).
+      // La automatizacion debe usar tab.ensure_auto, no tab.new.
       const t = await chrome.tabs.create({ url: args.url || "about:blank", active: args.active !== false });
       if (args.wait !== false) await waitLoad(t.id, 30000);
       const nt = await chrome.tabs.get(t.id);
       return { id: nt.id, url: nt.url, title: nt.title };
     }
     case "tab.activate": {
+      // Uso explicito del usuario/CLI: activa la pestaña Y enfoca su ventana.
+      // La automatizacion NO debe usar esta op; usar tab.ensure_auto + tab.show.
       if (args.tabId == null) return { ok: false, error: "tab.activate: falta tabId" };
       let t;
       try {
@@ -333,6 +408,37 @@ async function exec(op, args) {
         } catch (e) {}
       }
       return { id: t.id, url: t.url };
+    }
+    case "tab.ensure_auto": {
+      // Pestaña propia reutilizable para automatizacion. Nunca llama a windows.update.
+      // En Wayland el foco lo decide el compositor: focused:false es solo una peticion.
+      // Por eso el titulo inicial debe existir ANTES de que Hyprland mapee la ventana;
+      // la regla cxt_auto_nofocus hace match por titulo. Abrimos una pagina puente con
+      // <title>IA TRABAJANDO...</title> y solo despues navegamos.
+      const a = args || {};
+      if (a.reuse !== false) {
+        const cur = await getStoredAutoTab();
+        if (cur) return { tabId: cur.tabId, windowId: cur.windowId, created: false, focused: false };
+      }
+      const startUrl = chrome.runtime.getURL("auto-start.html");
+      const win = await chrome.windows.create({ url: startUrl, type: "normal", focused: false });
+      const tabs = await chrome.tabs.query({ windowId: win.id });
+      const tab = tabs && tabs[0];
+      if (!tab || tab.id == null) throw new Error("tab.ensure_auto: ventana sin pestaña");
+      await waitLoad(tab.id, 5000);
+      // Guardar ANTES de navegar: el content script de Facebook pregunta si esta
+      // pestaña es la automática al arrancar; si el id aún no está guardado, la
+      // respuesta sería "no" y el título/resumen no se aplicarían.
+      await chrome.storage.local.set({ [AUTO_TAB_KEY]: tab.id, [AUTO_WINDOW_KEY]: win.id });
+      await chrome.tabs.update(tab.id, { url: a.url || "https://www.facebook.com/", active: true });
+      return { tabId: tab.id, windowId: win.id, created: true, focused: false };
+    }
+    case "tab.show": {
+      // Solo selecciona la pestaña dentro de su propia ventana. No enfoca la ventana
+      // (nada de windows.update); es el unico "mostrar" permitido a la automatizacion.
+      if (args == null || args.tabId == null) return { ok: false, error: "tab.show: falta tabId" };
+      const t = await chrome.tabs.update(args.tabId, { active: true });
+      return { tabId: t.id, active: true, focused: false };
     }
     case "tab.close":
       if (args.tabId == null) return { ok: false, error: "tab.close: falta tabId" };
@@ -500,6 +606,27 @@ async function exec(op, args) {
       if (typeof op !== "string" || !op) return { ok: false, error: "op invalida" };
       if (args == null || typeof args !== "object") return { ok: false, error: "args invalidos para " + op };
       const t = await resolveTab(args);
+      if (op.startsWith("scrape.")) {
+        const u = (t && t.url) || "";
+        let bad = /^(chrome|chrome-extension|edge|about|view-source|devtools):/i.test(u);
+        if (!bad) {
+          try {
+            const h = new URL(u).hostname;
+            if (h === "chromewebstore.google.com" || h === "chrome.google.com") bad = true;
+          } catch (e) {}
+        }
+        if (bad) return { error: "UNSUPPORTED_URL" };
+        try {
+          const [rr] = await chrome.scripting.executeScript({
+            target: { tabId: t.id },
+            func: pageFn,
+            args: [op, args],
+          });
+          return rr ? rr.result : null;
+        } catch (e) {
+          return { error: "NO_TAB" };
+        }
+      }
       const [r] = await chrome.scripting.executeScript({
         target: { tabId: t.id },
         func: pageFn,
@@ -533,6 +660,12 @@ const RESULT_KEYS = {
   read: ["url", "title", "chars"],
   eval: ["value", "error"],
   batch: ["ok", "steps"],
+  "tab.ensure_auto": ["tabId", "windowId", "created", "focused"],
+  "tab.show": ["tabId", "active", "focused"],
+  "scrape.page": ["url","title","text","chars","mode","frames"],
+  "scrape.markdown": ["url","title","markdown","chars"],
+  "scrape.tables": ["url","tables","truncated"],
+  "scrape.links": ["url","links","truncated"],
 };
 
 function compact(op, res) {
@@ -614,6 +747,109 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     }
     return out;
   };
+  // Recorre el arbol y devuelve texto plano incluyendo shadowRoot abiertos.
+  function textOf(root) {
+    const out = [];
+    let n = 0;
+    const walk = (node) => {
+      if (!node || n >= NODE_CAP) return;
+      n++;
+      if (node.nodeType === 3) {
+        const t = (node.nodeValue || "").trim();
+        if (t) out.push(t);
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      try {
+        if (node.shadowRoot) walk(node.shadowRoot);
+      } catch (e) {}
+      for (const ch of node.childNodes) walk(ch);
+    };
+    walk(root);
+    return out.join("\n");
+  }
+
+  // Convierte un nodo a Markdown (GFM) sin salir de la pagina.
+  function mdOf(root) {
+    let n = 0;
+    const cell = (s) => String(s == null ? "" : s).replace(/\r?\n+/g, " ").replace(/\|/g, "\\|").trim();
+    const kids = (node) => {
+      let s = "";
+      try {
+        if (node.shadowRoot) for (const ch of node.shadowRoot.childNodes) s += one(ch);
+      } catch (e) {}
+      for (const ch of node.childNodes) s += one(ch);
+      return s;
+    };
+    const one = (node) => {
+      if (!node || n >= NODE_CAP) return "";
+      n++;
+      if (node.nodeType === 3) return node.nodeValue || "";
+      if (node.nodeType !== 1) return "";
+      const tag = String(node.tagName || "").toLowerCase();
+      if (tag === "script" || tag === "style" || tag === "noscript") return "";
+      if (/^h[1-6]$/.test(tag)) return "#".repeat(+tag[1]) + " " + kids(node).trim() + "\n\n";
+      if (tag === "p") return kids(node).trim() + "\n\n";
+      if (tag === "strong" || tag === "b") return "**" + kids(node).trim() + "**";
+      if (tag === "em" || tag === "i") return "*" + kids(node).trim() + "*";
+      if (tag === "ul" || tag === "ol") {
+        let i = 0;
+        let s = "";
+        for (const ch of node.children) {
+          if (!ch || String(ch.tagName || "").toLowerCase() !== "li") continue;
+          i++;
+          s += (tag === "ol" ? i + ". " : "- ") + kids(ch).trim() + "\n";
+        }
+        return s + "\n";
+      }
+      if (tag === "blockquote") return kids(node).trim().split(/\n+/).map((l) => "> " + l).join("\n") + "\n\n";
+      if (tag === "pre") return "```\n" + (node.textContent || "") + "\n```\n\n";
+      if (tag === "code") return "`" + (node.textContent || "") + "`";
+      if (tag === "a") {
+        const href = node.getAttribute("href") || "";
+        const txt = kids(node).trim();
+        if (!href || /^javascript:/i.test(href)) return txt;
+        return "[" + txt + "](" + href + ")";
+      }
+      if (tag === "img") return "![" + (node.getAttribute("alt") || "") + "](" + (node.getAttribute("src") || "") + ")";
+      if (tag === "table") {
+        const rows = [];
+        for (const tr of node.querySelectorAll("tr")) {
+          const cs = [];
+          for (const c of tr.querySelectorAll("th,td")) cs.push(cell(c.textContent));
+          if (cs.length) rows.push(cs);
+        }
+        if (!rows.length) return kids(node).trim() + "\n\n";
+        const head = rows[0];
+        let s = "| " + head.join(" | ") + " |\n| " + head.map(() => "---").join(" | ") + " |\n";
+        for (let i = 1; i < rows.length; i++) s += "| " + rows[i].join(" | ") + " |\n";
+        return s + "\n";
+      }
+      if (tag === "br") return "  \n";
+      if (tag === "hr") return "---\n\n";
+      return kids(node);
+    };
+    return one(root).replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  // Resuelve la raiz de scraping: selector -> main -> body.
+  function scrapeRoot(a) {
+    if (a && a.selector) {
+      try {
+        const el = document.querySelector(a.selector);
+        if (el) return { root: el, mode: "selector" };
+      } catch (e) {
+        return { error: "SELECTOR_INVALID" };
+      }
+    }
+    if (a && a.main !== false) {
+      for (const el of document.querySelectorAll("main, article, [role=main]")) {
+        if (el.innerText && el.innerText.length > 200) return { root: el, mode: "main" };
+      }
+    }
+    return { root: document.body || document.documentElement, mode: "body" };
+  }
+
   const all = () => Array.from(document.querySelectorAll(args.selector || "*"));
   const pick = () => {
     const els = all();
@@ -704,6 +940,115 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         if (m && m.innerText && m.innerText.length > 200) text = m.innerText;
       }
       return { url: location.href, title: document.title, chars: text.length, text: text.slice(0, max) };
+    }
+    case "scrape.page": {
+      if (!/html/i.test(document.contentType || "")) return { error: "NOT_HTML" };
+      const sr = scrapeRoot(args);
+      if (sr.error) return { error: sr.error };
+      const text = textOf(sr.root);
+      const max = args.max || 200000;
+      return {
+        url: location.href,
+        title: document.title,
+        text: text.slice(0, max),
+        chars: text.length,
+        mode: sr.mode,
+        frames: document.querySelectorAll("iframe").length,
+      };
+    }
+    case "scrape.markdown": {
+      if (!/html/i.test(document.contentType || "")) return { error: "NOT_HTML" };
+      const sr = scrapeRoot(args);
+      if (sr.error) return { error: sr.error };
+      const markdown = mdOf(sr.root);
+      const max = args.max || 200000;
+      if (markdown.length > max) return { error: "TOO_BIG", chars: markdown.length };
+      return { url: location.href, title: document.title, markdown, chars: markdown.length };
+    }
+    case "scrape.tables": {
+      if (!/html/i.test(document.contentType || "")) return { error: "NOT_HTML" };
+      const tables = [];
+      let truncated = false;
+      let totalRows = 0;
+      for (const tb of deepAll("table, [role=table]", NODE_CAP)) {
+        if (totalRows >= 500) {
+          truncated = true;
+          break;
+        }
+        let caption = "";
+        try {
+          const cap = tb.querySelector("caption");
+          caption = (cap && cap.textContent.trim()) || tb.getAttribute("aria-label") || "";
+        } catch (e) {}
+        const trs = Array.from(tb.querySelectorAll("tr, [role=row]"));
+        let headerRow = null;
+        for (const tr of trs) {
+          if (tr.querySelector("th")) {
+            headerRow = tr;
+            break;
+          }
+        }
+        const headers = [];
+        if (headerRow) {
+          const hs = Array.from(headerRow.querySelectorAll("th"));
+          if (hs.length > 50) truncated = true;
+          for (const c of hs.slice(0, 50)) headers.push((c.innerText || "").trim());
+        }
+        const rows = [];
+        for (const tr of trs) {
+          if (tr === headerRow) continue;
+          if (totalRows >= 500) {
+            truncated = true;
+            break;
+          }
+          const cells = Array.from(tr.querySelectorAll("td,th,[role=cell],[role=gridcell],[role=columnheader]"));
+          if (cells.length > 50) truncated = true;
+          rows.push(cells.slice(0, 50).map((c) => (c.innerText || "").trim()));
+          totalRows++;
+        }
+        tables.push({ caption, headers, rows });
+      }
+      const result = { url: location.href, tables, truncated };
+      while (JSON.stringify(result).length > 800000) {
+        let last = null;
+        for (let i = result.tables.length - 1; i >= 0; i--) {
+          if (result.tables[i].rows.length) {
+            last = result.tables[i];
+            break;
+          }
+        }
+        if (!last) break;
+        last.rows.pop();
+        result.truncated = true;
+      }
+      return result;
+    }
+    case "scrape.links": {
+      if (!/html/i.test(document.contentType || "")) return { error: "NOT_HTML" };
+      const seen = new Set();
+      const links = [];
+      let truncated = false;
+      for (const a of deepAll("a[href]", NODE_CAP)) {
+        if (links.length >= 2000) {
+          truncated = true;
+          break;
+        }
+        const href = a.href || "";
+        if (!href || /^javascript:/i.test(href)) continue;
+        if (seen.has(href)) continue;
+        seen.add(href);
+        let sameOrigin = false;
+        try {
+          sameOrigin = new URL(href).origin === location.origin;
+        } catch (e) {}
+        links.push({ text: (a.innerText || "").trim().slice(0, 120), href: href.slice(0, 300), sameOrigin });
+      }
+      const result = { url: location.href, links, truncated };
+      while (JSON.stringify(result).length > 800000 && result.links.length) {
+        result.links.pop();
+        result.truncated = true;
+      }
+      return result;
     }
     case "click": {
       const el = args.text ? byText() : pick();
@@ -1074,6 +1419,18 @@ chrome.runtime.onMessage.addListener((msg, _s, send) => {
     })();
     return true;
   }
+  if (msg.type === "autoTab") {
+    (async () => {
+      try {
+        const t = await getStoredAutoTab();
+        const id = _s && _s.tab ? _s.tab.id : null;
+        send({ auto: !!(t && id != null && t.tabId === id) });
+      } catch (e) {
+        send({ auto: false });
+      }
+    })();
+    return true;
+  }
   if (msg.type === "autoStats") {
     try {
       const v = msg.value && typeof msg.value === "object" ? msg.value : {};
@@ -1084,6 +1441,87 @@ chrome.runtime.onMessage.addListener((msg, _s, send) => {
       console.error(e);
     }
     send({ ok: true });
+    return true;
+  }
+  if (msg.type === "runOp") {
+    const reply = send;
+    if (_s && _s.tab) {
+      reply({ ok: false, error: "runOp: origen no permitido" });
+      return true;
+    }
+    const v = msg.value && typeof msg.value === "object" ? msg.value : {};
+    const op = v.op;
+    const args = v.args && typeof v.args === "object" ? v.args : {};
+    const allowed = ["scrape.page", "scrape.markdown", "scrape.tables", "scrape.links", "cdp", "navigate", "tabs"];
+    if (allowed.indexOf(op) < 0) {
+      reply({ ok: false, error: "runOp: op no permitida" });
+      return true;
+    }
+    if (op === "cdp" && args.method !== "Page.printToPDF") {
+      reply({ ok: false, error: "runOp: cdp no permitido" });
+      return true;
+    }
+    if (runOpBusy) {
+      reply({ ok: false, error: "runOp: ocupado" });
+      return true;
+    }
+    runOpBusy = true;
+    (async () => {
+      const at = () => {
+        const d = new Date();
+        return [d.getHours(), d.getMinutes(), d.getSeconds()].map((x) => String(x).padStart(2, "0")).join(":");
+      };
+      let resp;
+      try {
+        const result = await exec(op, args);
+        const bad = result && (result.ok === false || typeof result.error === "string");
+        resp = bad ? { ok: false, error: (result && result.error) || "runOp: error" } : { ok: true, data: result };
+      } catch (e) {
+        resp = { ok: false, error: "runOp: " + String(e) };
+      }
+      if (op === "cdp" && resp.ok === true && (((resp.data && resp.data.result && resp.data.result.data) || "").length > 12000000)) {
+        resp = { ok: false, error: "PDF_TOO_BIG" };
+      }
+      if (op.startsWith("scrape.")) {
+        const now = at();
+        let chars = 0;
+        if (resp.ok === true) {
+          const d = resp.data || {};
+          chars = typeof d.chars === "number" ? d.chars : JSON.stringify(d).length;
+        }
+        const errMsg = resp.ok === true ? "" : String(resp.error || "runOp: error").slice(0, 200);
+        const registro = resp.ok === true ? { op, at: now, ok: true, chars } : { op, at: now, ok: false, error: errMsg };
+        let log = [];
+        try {
+          const st = await chrome.storage.local.get("scrapingLog");
+          if (st && Array.isArray(st.scrapingLog)) log = st.scrapingLog;
+        } catch (e) {}
+        const linea = now + " · " + op + (resp.ok === true ? " · OK " + chars + " chars" : " · ERROR " + errMsg);
+        log.push(linea.slice(0, 200));
+        if (log.length > 200) log = log.slice(log.length - 200);
+        const size = JSON.stringify(registro).length;
+        if (size > 1000000) {
+          resp = { ok: false, error: "TOO_BIG_STORAGE", chars: size };
+        } else {
+          try {
+            await chrome.storage.local.set({ scrapingLog: log, scrapingResult: registro });
+          } catch (e) {
+            resp = { ok: false, error: "STORAGE: " + e };
+          }
+        }
+      } else if (op === "cdp") {
+        const now = at();
+        const bytes = resp.ok === true ? (((resp.data && resp.data.result && resp.data.result.data) || "").length) : 0;
+        const registro = resp.ok === true ? { op, at: now, ok: true, bytes } : { op, at: now, ok: false, error: String(resp.error || "").slice(0, 200) };
+        try {
+          await chrome.storage.local.set({ scrapingResult: registro });
+        } catch (e) {
+          resp = { ok: false, error: "STORAGE: " + e };
+        }
+      }
+      send(resp);
+      runOpBusy = false;
+    })();
     return true;
   }
   const ep = API[msg.type];

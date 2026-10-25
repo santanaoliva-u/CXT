@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Diario de Prueba</title>
+    <link>https://example.test/</link>
+    <description>Fixtures offline para la mesa editorial</description>
+    <item>
+      <title>Playa del Carmen impulsa un plan de movilidad</title>
+      <link>https://example.test/playa-movilidad</link>
+      <description><![CDATA[El ayuntamiento presentó un plan de movilidad con nuevas rutas y horarios para el centro de Playa del Carmen.]]></description>
+      <pubDate>Thu, 22 Oct 2026 10:00:00 GMT</pubDate>
+      <source>Diario de Prueba</source>
+    </item>
+    <item>
+      <title>México y la región discuten cooperación energética</title>
+      <link>https://example.test/mexico-energia</link>
+      <description><![CDATA[Representantes de México y varios países de la región se reunieron para discutir cooperación energética y precios.]]></description>
+      <pubDate>Wed, 21 Oct 2026 18:30:00 GMT</pubDate>
+      <source>Agencia de Prueba</source>
+    </item>
+    <item>
+      <title>Playa del Carmen impulsa un plan de movilidad</title>
+      <link>https://example.test/playa-movilidad-copia</link>
+      <description>Duplicado de la misma noticia para probar la deduplicación.</description>
+      <pubDate>Thu, 22 Oct 2026 10:05:00 GMT</pubDate>
+      <source>Otro Medio</source>
+    </item>
+  </channel>
+</rss>

@@ -112,7 +112,8 @@ assert text, "post vacio"
 
 t0 = time.time()
 log("=== PUBLICAR (clone) ===")
-call("tab.activate", {"tabId": TAB})
+# Sin activacion: se publica en la pestana resuelta (propia/segundo plano) para
+# no robar el foco del usuario.
 clear_drafts()
 ensure_fresh()
 call("cdpkey", {"key": "Escape", "tabId": TAB})

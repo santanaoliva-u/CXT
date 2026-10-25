@@ -1,39 +1,78 @@
-# build artifacts
+# Binarios compilados
 bin/
 *.exe
 
-# runtime state
-*.pid
+# Tokens y secretos
+token
+*.token
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Estado de ejecución (no es código)
+autopost_attempts.json
+autopost_status.json
+autoqueue.json
+autopost.cmd.json
+commented.json
+comment_status.json
+comment.cmd.json
+groups.json
+groups_labels.json
+profiles_active.json
+profiles_ports.json
+research_cache.json
 schedule.json
 schedule.cmd.json
-used.json
-pool.txt
-groups.json
 share_status.json
 share.cmd.json
 share_post_status.json
 share_post.cmd.json
-token
+used.json
+pool.txt
+share_trace.jsonl
 
-# scratch / dumps (DOM dumps, API captures, screenshots)
+# Bases de datos locales
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Procesos, bloqueos y logs
+*.pid
+*.lock
+*.log
+logs/
+
+# Copias y parches de trabajo
+*.bak
+*.bak-*
+*.bak.*
+*.pre-*
+
+# Capturas y artefactos de depuración
 *.png
 *.jpg
-all*.json
-aria.json
-b.json
-bp*.json
+*.jpeg
+*.webp
+*.gif
+diag_*
+p[0-9].txt
+_dev/
+.qa/
+.playwright-mcp/
 
-# python
+# Artefactos de agentes y pruebas
+.omo/
+.pytest_cache/
 __pycache__/
-*.pyc
+*.py[cod]
+work/
 
-# logs
-*.log
-
-# editor / OS
+# Editor / sistema
 .DS_Store
 .idea/
 .vscode/
-comment_status.json
-comment.cmd.json
-commented.json
