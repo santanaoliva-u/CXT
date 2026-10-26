@@ -1,6 +1,6 @@
 const $ = (id) => document.getElementById(id);
 const FIELDS = ["server", "token", "manager", "mgrToken", "sint", "scount", "stopic", "stext",
-  "purl", "pexpect", "pfilter", "plimit", "ptext", "pdry", "pfast",
+  "purl", "pexpect", "pfilter", "plimit", "ptext", "pdry", "pfast", "pcomposer",
   "gfilter", "glimit", "gtext", "gdry",
   "curl", "cmode", "ctext", "cint", "ccount", "cdry",
   "surl", "s_main", "ssel", "sf_md", "sf_pdf", "sf_csv", "sf_txt"];
@@ -1389,7 +1389,8 @@ function wire() {
   $("pstart").addEventListener("click", async () => {
     const dry = $("pdry").checked;
     if (needConfirm(dry)) return;
-    const value = { url: $("purl").value.trim(), expect: $("pexpect").value, filter: $("pfilter").value.trim(), limit: +$("plimit").value || 0, text: $("ptext").value, dry, fast: $("pfast").checked, delay: 8 };
+    const value = { url: $("purl").value.trim(), expect: $("pexpect").value, filter: $("pfilter").value.trim(), limit: +$("plimit").value || 0, text: $("ptext").value, dry, fast: $("pfast").checked, delay: 8,
+      composer: $("pcomposer").checked };
     if (!value.filter && !value.ids) {
       alert("Indica los grupos (filtro o ids) antes de iniciar");
       return;
