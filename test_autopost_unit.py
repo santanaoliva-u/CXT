@@ -883,6 +883,115 @@ try:
 finally:
     AP.ATTEMPTS = _att34_before
 
+# 35. reconcile_unknown: sube unknown con evidencia, sin contar intento ------
+_DB35 = os.path.join(_TMP, "f35.db")
+L.init(_DB35)
+L.group_state("g35", name="Bazar 35", db=_DB35)
+L.result("g35", "fbid:3500", "unknown", False, db=_DB35)
+L.result("g35", "fbid:3600", "unknown", False, db=_DB35)
+L.result("g35", "fbid:3700", "ok", True, proof="keep", db=_DB35)
+_n35_before = [r["n"] for r in L.unresolved(limit=5, db=_DB35)]
+check("35 unresolved solo trae unknown", len(_n35_before) == 2, _n35_before)
+check("35 unresolved ordena recientes primero",
+      [r["post_key"] for r in L.unresolved(limit=5, db=_DB35)]
+      == ["fbid:3600", "fbid:3500"],
+      [r["post_key"] for r in L.unresolved(limit=5, db=_DB35)])
+
+def _ev35(row):
+    if row["post_key"] == "fbid:3600":
+        return {"proof": "https://www.facebook.com/groups/g35/posts/3600/"}
+    return None
+
+_out35 = AP.reconcile_unknown(evidence_fn=_ev35, db=_DB35, limit=10)
+_pm35 = L.post_group_map(db=_DB35)
+check("35 reconcile sube solo el que tiene prueba",
+      _out35 == {"checked": 2, "ok": 1, "left": 1, "errors": 0}, _out35)
+check("35 unknown con prueba => ok + permalink",
+      _pm35[("g35", "fbid:3600")]["status"] == "ok"
+      and _pm35[("g35", "fbid:3600")]["proof"].endswith("/3600/"),
+      _pm35[("g35", "fbid:3600")])
+check("35 sin prueba se queda unknown (no inventa)",
+      _pm35[("g35", "fbid:3500")]["status"] == "unknown"
+      and _pm35[("g35", "fbid:3500")]["proof"] == "",
+      _pm35[("g35", "fbid:3500")])
+check("35 subir unknown no cuenta intento (n intacta)",
+      _pm35[("g35", "fbid:3600")]["n"] == 1,
+      _pm35[("g35", "fbid:3600")]["n"])
+check("35 no toca un ok previo",
+      _pm35[("g35", "fbid:3700")]["proof"] == "keep",
+      _pm35[("g35", "fbid:3700")])
+check("35 upgrade exige unknown (0 filas si ya es ok)",
+      L.upgrade("g35", "fbid:3700", "otro", db=_DB35) == 0,
+      L.upgrade("g35", "fbid:3700", "otro", db=_DB35))
+
+# 36. Ronda real: unknown con prueba en la vista member => item hecho --------
+_rs36 = AP.run_share
+_ev36 = AP._default_evidence
+
+
+def _round36(url, gid, dry=False):
+    _now = int(time.time() * 1000)
+    _st = AP.default_status()
+    AP.roll_day(_st, L.utc_day(_now))
+    _out = AP._publish(_st, {}, [], {"url": url, "dry": dry,
+                                     "state": "pendiente"},
+                       _now, gids=[gid], post_key=L.post_key(url))
+    return _out, _st
+
+
+AP.STATUS = os.path.join(_TMP, "autopost_status.json")
+AP.save_attempts({})
+_calls36 = []
+
+
+def _ev36_ok(row, db=None):
+    _calls36.append(row.get("gid"))
+    return {"proof": "https://www.facebook.com/groups/g36/posts/3600/"}
+
+
+try:
+    L.init()
+    L.group_state("g36", name="Bazar 36")
+    AP.run_share = lambda item: {"published": 0, "results": [
+        {"gid": "g36", "ok": False, "status": "unknown", "proof": ""}]}
+    AP._default_evidence = _ev36_ok
+    _u36 = "https://www.facebook.com/groups/1/posts/3600/"
+    _out36, _ = _round36(_u36, "g36")
+    check("36 unknown con prueba => item hecho", _out36.get("state") == "hecho",
+          _out36.get("state"))
+    check("36 unknown con prueba => published 1", _out36.get("published") == 1,
+          _out36.get("published"))
+    _pm36 = L.post_group_map().get(("g36", L.post_key(_u36))) or {}
+    check("36 fila sube a ok con permalink",
+          _pm36.get("status") == "ok" and "3600" in str(_pm36.get("proof")),
+          _pm36)
+    check("36 acreditar no cuenta intento (n=1)", _pm36.get("n") == 1,
+          _pm36.get("n"))
+
+    _calls36.clear()
+    L.group_state("g36b", name="Bazar 36b")
+    AP.run_share = lambda item: {"published": 0, "results": [
+        {"gid": "g36b", "ok": False, "status": "unknown", "proof": ""}]}
+    AP._default_evidence = lambda row, db=None: None
+    _out36b, _st36b = _round36("https://www.facebook.com/groups/1/posts/3601/",
+                               "g36b")
+    check("36 sin prueba en el grupo => item error",
+          _out36b.get("state") == "error", _out36b.get("state"))
+    check("36 sin prueba => error '1 sin prueba'",
+          "sin prueba" in str((_st36b["results"][-1] or {}).get("error")),
+          _st36b["results"][-1])
+
+    _calls36.clear()
+    AP._default_evidence = _ev36_ok
+    AP.run_share = lambda item: {"results": [
+        {"gid": "g36", "ok": False, "status": "unknown", "proof": ""}]}
+    _round36("https://www.facebook.com/groups/1/posts/3602/", "g36", dry=True)
+    check("36 un dry NO revisa unknown (0 llamadas)", _calls36 == [], _calls36)
+finally:
+    AP.run_share = _rs36
+    AP._default_evidence = _ev36
+
+
 for _name, _before in _REAL_STATE_BEFORE.items():
     _after = _snap(_name)
     check("unit no creo ni toco ~/.cxt/%s" % _name,

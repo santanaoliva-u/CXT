@@ -202,7 +202,7 @@ SP.ledger.lock_browser = lambda *a, **k: (_ for _ in ()).throw(
     AssertionError("toco el lock con CXT_LOCK_HELD=1"))
 
 
-def _fake_share(url, name, dry, text, expect=""):
+def _fake_share(url, name, dry, text, expect="", mode=None):
     _calls.append(name)
     if name == "Grupo Tres":
         return {"ok": True, "published": True, "proof": "/groups/333/posts/1/"}

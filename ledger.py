@@ -475,6 +475,52 @@ def inflight(batch="", db=None) -> list:
     return _read(db, op)
 
 
+def unresolved(limit=50, post_key=None, gids=None, db=None) -> list:
+    """Parejas con veredicto `unknown` (duda sin prueba), recientes primero.
+
+    Un `unknown` es terminal para el selector: la pareja nunca se reintenta
+    (anti-duplicado). Estas filas son justo las que pueden tener ya una
+    publicacion real sin acreditar, asi que se revisan con evidencia leida.
+    `post_key`/`gids` acotan el barrido a lo que dejo una ronda concreta.
+    """
+    def op(conn):
+        sql = ("SELECT gid, post_key, last_ts, n, proof FROM post_group"
+               " WHERE status='unknown'")
+        args = []
+        if post_key:
+            sql += " AND post_key=?"
+            args.append(post_key)
+        want = [str(g) for g in (gids or []) if g]
+        if want:
+            sql += " AND gid IN (%s)" % ", ".join("?" for _ in want)
+            args.extend(want)
+        sql += " ORDER BY last_ts DESC LIMIT ?"
+        args.append(max(0, int(limit)))
+        return [dict(row) for row in conn.execute(sql, args)]
+
+    return _read(db, op)
+
+
+def upgrade(gid, post_key, proof, ts=None, db=None) -> int:
+    """Sube `unknown` a `ok` con el permalink como prueba, sin contar intento.
+
+    `result()` hace `n=n+1`, pero aqui no hubo una publicacion nueva: solo se
+    corrige el veredicto con evidencia ya leida. El WHERE exige `unknown`, de
+    modo que un `ok`/`blocked`/`removed` nunca se pisa ni se degrada.
+    Devuelve las filas cambiadas (0 = no habia nada que subir).
+    """
+    ts = now_ms() if ts is None else int(ts)
+
+    def op(conn):
+        cur = conn.execute(
+            "UPDATE post_group SET status='ok', ok=1, proof=?, last_ts=?"
+            " WHERE gid=? AND post_key=? AND status='unknown'",
+            (proof or "", ts, gid, post_key))
+        return cur.rowcount
+
+    return _write(db, op)
+
+
 def post_group_map(db=None) -> dict:
     """Mapa (gid, post_key) -> ultimo resultado; lo usa el selector para el
     enfriamiento por publicacion."""

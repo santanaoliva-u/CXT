@@ -269,15 +269,18 @@ def js_share_context(expect="", post_url=""):
  const media=[...root.querySelectorAll('img,video')].filter(vis).filter(e=>{
    const r=e.getBoundingClientRect();return r.width>=80&&r.height>=60;}).length;
  const mediaOk=media>0&&prefixHit;
- return {reason:(link||needle||mediaOk)?'ok':'composer-sin-post',link:link,needle:needle,
-   prefix:prefixHit,articles:arts,media:media,postId:postId,text:text.slice(0,800)};})()"""
+  return {reason:(link||needle||mediaOk)?'ok':'composer-sin-post',link:link,needle:needle,
+    mediaOk:mediaOk,prefix:prefixHit,articles:arts,media:media,postId:postId,
+    text:text.slice(0,800)};})()"""
 
 
 def classify_share_context(ev):
-    """Clasifica la evidencia del compositor: solo enlace o texto del post."""
+    """Clasifica la evidencia del compositor: enlace, texto o multimedia del post."""
     if not isinstance(ev, dict):
         return False, "composer-sin-post"
-    if ev.get("link") or ev.get("needle"):
+    # mediaOk la calculaba js_share_context pero se descartaba aqui, y abortaba
+    # compositores validos donde FB ofusca el texto (visto: media=2, prefix=true).
+    if ev.get("link") or ev.get("needle") or ev.get("mediaOk"):
         return True, "ok"
     return False, "composer-sin-post"
 
@@ -720,7 +723,31 @@ JS_STALE_CLOSE = "(()=>{" + JS_VISIBLE + """
      const t=document.elementFromPoint(x,y);
      if(t&&(t===e||e.contains(t)))return {x:x,y:y,dialogs:dlg.length};}
  }
- return {n:dlg.length,x:null};})()"""
+  return {n:dlg.length,x:null};})()"""
+
+# El menu Compartir puede quedarse ENCIMA del compositor del grupo (medido:
+# menu 548x550 @151,56 tapando Publicar en y=503..539) y JS_STALE_CLOSE cerraba
+# el X equivocado. Este busca el X del dialogo del MENU, identificado por su
+# texto, y exige que exista un compositor aparte para no cerrar nunca el post.
+JS_DISMISS_SHARE_MENU = "(()=>{" + JS_VISIBLE + """
+ const dialogs=[...document.querySelectorAll('div[role=dialog]')].filter(vis);
+ const isComp=(d)=>/crear publicaci|create post/i.test(d.innerText||'');
+ if(!dialogs.some(isComp)) return {reason:'sin-compositor'};
+ const isMenu=(d)=>{const t=(d.innerText||'').replace(/\\s+/g,' ').trim();
+   if(isComp(d)) return false;
+   return /^(compartir|share)\\b/i.test(t)||/haz un comentario/i.test(t);};
+ const menus=dialogs.filter(isMenu);
+ const re=/^(cerrar|close)$/i;
+ for(const d of menus){
+   for(const e of d.querySelectorAll('[aria-label]')){
+     if(!re.test((e.getAttribute('aria-label')||'').trim())) continue;
+     const r=e.getBoundingClientRect(); if(r.width<8||r.height<8) continue;
+     const x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2);
+     const t=document.elementFromPoint(x,y);
+     if(t&&(t===e||e.contains(t))) return {x:x,y:y,menus:menus.length};}
+ }
+ for(const d of menus){d.setAttribute('data-cxt-hid-menu','1');d.style.visibility='hidden';}
+ return {hidden:menus.length,menus:menus.length};})()"""
 
 # Auditoria del punto de click: que elementos hay realmente encima.
 JS_POINT_STACK = ("(()=>{const es=document.elementsFromPoint(%d,%d);"
@@ -1031,7 +1058,19 @@ def type_search(cxt, tab, name, timeout=1.5):
         time.sleep(JS_TICK)
 
 
-def _wait_submit(cxt, tab, timeout=6.0, step="submit"):
+_COVER_CHAIN_JS = """(()=>{const out=[];const els=document.elementsFromPoint(__X__,__Y__)||[];for(const e of els){const r=e.getBoundingClientRect();if(r.width<1&&r.height<1)continue;out.push({tag:e.tagName,role:e.getAttribute('role')||'',aria:e.getAttribute('aria-label')||'',cls:String(e.className||'').slice(0,60),txt:(e.innerText||'').trim().replace(/[\\n\\t ]+/g,' ').slice(0,60),x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)});if(out.length>=6)break}return out})()"""
+
+
+def _cover_chain(cxt, tab, x, y):
+    """Quien tapa un punto: cadena real de elementsFromPoint con su rect."""
+    if x is None or y is None:
+        return []
+    js = _COVER_CHAIN_JS.replace("__X__", str(int(x))).replace("__Y__", str(int(y)))
+    got = cxtlib.cdp(cxt, tab, js)
+    return got if isinstance(got, list) else []
+
+
+def _wait_submit(cxt, tab, timeout=6.0, step="submit", dismiss=False):
     """Espera un Publicar VALIDADO (contenedor de grupo y punto pulsable).
 
     Devuelve (pick|None, info). Completa transiciones en cada intento: el
@@ -1040,17 +1079,35 @@ def _wait_submit(cxt, tab, timeout=6.0, step="submit"):
     tries = 0
     t0 = time.time()
     s = None
+    tried_dismiss = False
     while True:
         tries += 1
         settle(cxt, tab)
         s = cxtlib.cdp(cxt, tab, JS_SUBMIT)
         if s and s.get("x") is not None and not s.get("reason"):
             return s, {"tries": tries, "hit": True, "timed_out": False}
+        if (dismiss and not tried_dismiss
+                and isinstance(s, dict) and s.get("reason") == "cubierto"):
+            # El menu Compartir se queda encima del compositor (medido) y
+            # esperar 20 s a un boton cubierto es perder el turno: se cierra
+            # esa capa en cuanto se detecta y se sigue sondeando.
+            tried_dismiss = True
+            _dismiss_share_menu(cxt, tab)
+            continue
         if time.time() - t0 >= timeout:
             if step:
                 print("poll timeout %s tras %.1fs (tries=%d) reason=%s"
                       % (step, time.time() - t0, tries,
                          (s or {}).get("reason") or "sin-boton"), flush=True)
+                if isinstance(s, dict) and s.get("reason") == "cubierto":
+                    print("   boton %r root=%s"
+                          % (s.get("label"),
+                             json.dumps(s.get("root"), ensure_ascii=False)),
+                          flush=True)
+                    print("   encima: %s"
+                          % json.dumps(_cover_chain(cxt, tab, s.get("x"),
+                                                    s.get("y")),
+                                       ensure_ascii=False), flush=True)
             return s, {"tries": tries, "hit": bool(s and s.get("x") is not None),
                        "timed_out": True}
         time.sleep(TICK)
@@ -1101,9 +1158,49 @@ def _isolate_submit(cxt, tab, stats=None):
     return s
 
 
+def _dismiss_share_menu(cxt, tab, stats=None):
+    """Cierra SOLO el menu Compartir si quedo encima del compositor del grupo.
+
+    Medido (25-oct): el menu 548x550 @151,56 se quedaba encima del compositor
+    548x448 @151,107 y tapaba Publicar en y=503..539. Pulsar su X deja el
+    compositor intacto y Publicar expuesto; Escape cerraria el compositor."""
+    d = None
+    t0 = time.time()
+    while time.time() - t0 < 3.0:
+        d = cxtlib.cdp(cxt, tab, JS_DISMISS_SHARE_MENU)
+        if isinstance(d, dict) and (d.get("x") is not None
+                                   or d.get("reason") != "sin-cerrar"):
+            break
+        settle(cxt, tab)
+    if isinstance(d, dict) and d.get("hidden"):
+        if stats is not None:
+            stats["menu_closed"] = True
+        log("   menu compartir oculto (%d capa(s), compositor intacto)"
+            % d["hidden"])
+        return True
+    if not (isinstance(d, dict) and d.get("x") is not None):
+        log("   menu compartir: no cerrable %s"
+            % json.dumps(d, ensure_ascii=False)[:200])
+        return False
+    cxtlib.click(cxt, tab, d["x"], d["y"])
+    settle(cxt, tab)
+    time.sleep(0.3)
+    if stats is not None:
+        stats["menu_closed"] = True
+    log("   menu compartir cerrado (compositor intacto)")
+    return True
+
+
+def _fail(stats, why):
+    """Deja en stats el motivo REAL del fallo para la traza de la ronda."""
+    if stats is not None:
+        stats["fail_reason"] = str(why or "fallo")
+
+
 def search_and_select(cxt, tab, name, stats=None, expect="", post_url="", dry=True):
     """Selecciona el grupo; en simulacro no pulsa ninguna accion final."""
     if not poll_js(cxt, tab, JS_PICKER, timeout=3.0, tick=TICK, step="search_picker")[0]:  # JS_PICKER hace scroll+focus
+        _fail(stats, "picker")
         return False
     if not type_search(cxt, tab, name):
         poll_js(cxt, tab, JS_PICKER, timeout=1.2, tick=TICK, step="search_picker2")
@@ -1119,9 +1216,16 @@ def search_and_select(cxt, tab, name, stats=None, expect="", post_url="", dry=Tr
             stats["picker"] = dbg
         log("   picker sin fila para %r: %s"
             % (name, json.dumps(dbg, ensure_ascii=False)[:700]))
+        _fail(stats, "row")
         return False
     settle(cxt, tab)
     time.sleep(0.4)
+    # Etapa `fila` visible en el log de la ronda: sin esto una seleccion
+    # equivocada solo se notaba al fallar el compositor, sin decir que fila
+    # se habia pulsado (causa del fallo confuso de la ronda del 25-oct).
+    row = sel if isinstance(sel, dict) else {}
+    log("   fila: %r (pri=%s, cands=%s, checked=%s)"
+        % (row.get("t"), row.get("pri"), row.get("cands"), row.get("checked")))
     if dry:
         log("   simulacro: grupo seleccionado; no se pulsa Compartir ahora")
         if stats is not None:
@@ -1151,16 +1255,25 @@ def search_and_select(cxt, tab, name, stats=None, expect="", post_url="", dry=Tr
                 settle(cxt, tab)
                 s, info = _wait_submit(cxt, tab, timeout=20.0, step="search_share")
     else:
-        s, info = _wait_submit(cxt, tab, timeout=20.0, step="search_submit")
+        s, info = _wait_submit(cxt, tab, timeout=20.0, step="search_submit",
+                               dismiss=True)
     if not (s and s.get("x") is not None and not s.get("reason")):
-        if isinstance(s, dict) and s.get("reason") in ("cubierto", "invisible"):
-            s = _isolate_submit(cxt, tab, stats=stats)
+        if (isinstance(s, dict) and s.get("reason") in ("cubierto", "invisible")
+                and not (stats or {}).get("menu_closed")):
+            # El menu Compartir se queda encima del compositor y tapa Publicar
+            # (medido): cerrar SU X deja el compositor y expone el boton. El
+            # rescate generico (_isolate_submit) cerraba el X equivocado.
+            if _dismiss_share_menu(cxt, tab, stats=stats):
+                s = cxtlib.cdp(cxt, tab, JS_SUBMIT)
+            if not (s and s.get("x") is not None and not s.get("reason")):
+                s = _isolate_submit(cxt, tab, stats=stats)
             info = {"tries": (info or {}).get("tries", 0),
                     "hit": bool(s and s.get("x") is not None and not s.get("reason")),
                     "timed_out": not bool(s and s.get("x") is not None and not s.get("reason"))}
     if stats is not None:
         stats.update(info)
     if not (s and s.get("x") is not None and not s.get("reason")):
+        _fail(stats, (isinstance(s, dict) and s.get("reason")) or "sin-submit")
         return False
     ev, cinfo = _wait_share_context(cxt, tab, expect, post_url, timeout=6.0,
                                     step="search_share_ctx")
@@ -1172,6 +1285,7 @@ def search_and_select(cxt, tab, name, stats=None, expect="", post_url="", dry=Tr
     if not ok:
         log("   contexto: %s" % json.dumps(ev, ensure_ascii=False))
         log("   ABORTO (%s): el compositor no contiene el post original" % why)
+        _fail(stats, why)
         return False
     return True
 
@@ -1254,6 +1368,7 @@ def submit(cxt, tab, dry, text="", stats=None, verify=None,
     if stats is not None:
         stats["before_pids"] = len(before_pids)
     click_ts = int(time.time())
+    log("   Publicar: %r audience=%r" % (s.get("label"), (s.get("audience") or "")[:160]))
     cxtlib.click(cxt, tab, s["x"], s["y"])              # click FIEL para el paso que publica
     hit = cxtlib.cdp(cxt, tab, JS_HIT)
     click_hit = bool(isinstance(hit, dict)
@@ -1393,7 +1508,10 @@ def close_all_dialogs(cxt, tab, timeout=10.0, allow_reload=True, stats=None):
         cur = cxtlib.cdp(cxt, tab, "location.href") or ""
         if cur:
             log("   pila tapada (%s dialogos): recargo la pestana para partir limpio" % n)
-            cxtlib.call(cxt, "navigate", {"tabId": tab, "url": cur, "timeout": 30000}, 90)
+            # navigate a la MISMA url esperaba load hasta 90 s y con el compositor
+            # abierto FB a veces no lo dispara: la limpieza se pasaba de 120 s.
+            # reload hace lo mismo y responde; tope global 60 s para no colgar.
+            cxtlib.call(cxt, "reload", {"tabId": tab}, 40)
             poll_js(cxt, tab, JS_READY, timeout=10.0, tick=TICK)
             poll_js(cxt, tab, "(" + JS_DIALOG_COUNT + ")===0", timeout=8.0, tick=TICK,
                     step="cleanup_reload")
@@ -1850,8 +1968,29 @@ def js_post_candidates(gid):
     return JS_POST_CANDIDATES.replace("__GID__", json.dumps(str(gid or "")))
 
 
+def _needle_match(ctext, want_needle):
+    """True si el texto normalizado trae el needle completo o TODAS sus palabras.
+
+    Facebook mete emojis y saltos entre las frases del post compartido, asi que
+    la subcadena exacta fallaba aunque el texto estuviera (falso `sin-prueba`
+    visto en vivo). Se exige ademas la primera y la ultima palabra en ese orden
+    para no aceptar un post que solo repite palabras sueltas del needle."""
+    if not want_needle:
+        return False
+    if want_needle in ctext:
+        return True
+    words = [w for w in re.split(r"[^0-9a-z\u00f1]+", want_needle) if len(w) >= 3]
+    if len(words) < 3:
+        return False
+    have = set(re.split(r"[^0-9a-z\u00f1]+", ctext))
+    if any(w not in have for w in words):
+        return False
+    first = ctext.find(words[0])
+    return first >= 0 and ctext.rfind(words[-1]) > first
+
+
 def pick_new_post_permalink(candidates, gid, needle="", not_before_ts=None, fbid="",
-                            before_pids=None):
+                            before_pids=None, own=False):
     """Elige el mejor post NUEVO por permalink, sin navegador (funcion pura).
 
     Filtra gid, ruido de comentarios/notificaciones, timestamp >= not_before_ts
@@ -1861,7 +2000,15 @@ def pick_new_post_permalink(candidates, gid, needle="", not_before_ts=None, fbid
     Si el timestamp es desconocido (ts<=0) solo se acepta cuando la linea base
     `before_pids` (pids visibles ANTES de pulsar Publicar) existe y NO contiene el
     pid del candidato: id nuevo. Sin baseline (`before_pids=None`) se rechaza,
-    igual que antes (fail-closed)."""
+    igual que antes (fail-closed).
+
+    `own=True` (ruta member: /groups/<gid>/user/<uid>/, solo MIS publicaciones)
+    acepta ademas un pid con ts >= not_before_ts que no estaba en la linea base
+    aunque el texto extraido no traiga el needle ni el fbid: el feed real de FB
+    recorta el texto (`... Ver mas`) y la vista member no pinta DOM, asi que la
+    identidad por texto daba falso `sin-prueba` en posts SI publicados. La
+    evidencia sigue siendo positiva (post mio + id nuevo + creado tras el click);
+    con `own=False` la puerta queda exactamente igual de estricta."""
     gid = str(gid or "").strip()
     if not gid:
         return None
@@ -1910,18 +2057,22 @@ def pick_new_post_permalink(candidates, gid, needle="", not_before_ts=None, fbid
         ctext = " ".join(cxtlib.norm(c.get("text") or "").split())
         cfbid = str(c.get("fbid") or "").strip()
         fbid_hit = bool(want_fbid and cfbid == want_fbid)
-        needle_hit = bool(want_needle and want_needle in ctext)
-        if not (fbid_hit or needle_hit):
+        needle_hit = _needle_match(ctext, want_needle)
+        own_ok = bool(own and ts > 0 and nb is not None and ts >= nb
+                      and (before is None or pid not in before))
+        if not (fbid_hit or needle_hit or own_ok):
             continue
         if str(c.get("status") or "").upper() in ("DRAFT", "SCHEDULED", "ERROR", "FAILED"):
             continue
-        score = (2 if fbid_hit else 0) + (1 if needle_hit else 0)
+        score = ((2 if fbid_hit else 0) + (1 if needle_hit else 0)
+                 + (1 if own_ok else 0))
         key = (score, ts, int(pid))
         if best_key is None or key > best_key:
             best_key = key
             best = {"url": "https://www.facebook.com/groups/%s/posts/%s/" % (gid, pid),
                     "pid": pid, "gid": gid, "ts": ts, "text": ctext, "fbid": cfbid,
-                    "score": score, "fbid_hit": fbid_hit, "needle_hit": needle_hit}
+                    "score": score, "fbid_hit": fbid_hit, "needle_hit": needle_hit,
+                    "own_ok": own_ok}
     return best
 
 
@@ -2124,7 +2275,8 @@ def confirm_new_post_permalink(cxt, tab, gid, needle="", fbid="", group="",
                 sig["candidates"] = len(seen)
                 win = pick_new_post_permalink(seen, gid, needle=needle,
                                               not_before_ts=not_before_ts, fbid=fbid,
-                                              before_pids=before_pids)
+                                              before_pids=before_pids,
+                                              own=(name == "member"))
                 if win:
                     route["winner"] = win["pid"]
                     sig["routes"].append(route)
@@ -2373,7 +2525,7 @@ def _share_one(cxt, tab, group, dry, text, expect, verify=None, post_url=""):
         picked = search_and_select(cxt, tab, group, stats=st3, expect=needle,
                                    post_url=post_url, dry=dry)
         trace(group, "search_select", now_ms() - t0, picked,
-              "" if picked else "row", st3,
+              "" if picked else (st3.get("fail_reason") or "row"), st3,
               None if picked else {"picker": st3.get("picker")})
         if not picked:
             log("  no encontre/comparti el grupo; cierro solo el selector")
@@ -2403,6 +2555,150 @@ def _share_one(cxt, tab, group, dry, text, expect, verify=None, post_url=""):
     log("  AGOTADO: no se pudo completar")
     return {"ok": False, "stage": "retry-exhausted", "tries": attempts,
             "reason": "retry-exhausted"}
+
+
+# --- camino alterno: compositor propio del grupo --------------------------
+# El flujo Compartir -> "Compartir en un grupo" -> Publicar deja el compositor
+# cerrado pero NO crea la publicacion en esta cuenta (ronda del 26-oct: 0/10;
+# run#4: sin rastro en el grupo). El compositor del propio grupo ("Escribe
+# algo...") si publica: verificado con permalink y vista member. Estas sondas
+# son el equivalente web de lo que se probo a mano; se mantienen aparte para no
+# tocar el flujo de compartir, que sigue siendo el camino por defecto.
+JS_GC_TRIGGER = """(()=>{const c=[];
+ for(const e of document.querySelectorAll('[role=button]')){
+   const t=(e.innerText||e.getAttribute('aria-label')||'').trim();
+   if(!/^escribe algo|^write something/i.test(t)) continue;
+   if(t.length>40) continue;
+   const r=e.getBoundingClientRect();
+   if(r.width<200||r.height<20) continue;
+   c.push({e:e,w:Math.round(r.width)});}
+ if(!c.length) return null;
+ c.sort((a,b)=>b.w-a.w);
+ const el=c[0].e; el.scrollIntoView({block:'center'});
+ const r=el.getBoundingClientRect();
+ const x=Math.round(r.x+r.width/2), y=Math.round(r.y+r.height/2);
+ const top=document.elementFromPoint(x,y);
+ return {x:x,y:y,w:Math.round(r.width),h:Math.round(r.height),
+   exposed:!!top&&(el===top||el.contains(top)||top.contains(el))};})()"""
+
+JS_GC_EDITOR = """(()=>{for(const d of document.querySelectorAll('div[role=dialog]')){
+   if(!/crear publicaci|create post/i.test(d.innerText||'')) continue;
+   const r=d.getBoundingClientRect(); if(r.width<200) continue;
+   const ed=d.querySelector('[contenteditable="true"]'); if(!ed) continue;
+   const er=ed.getBoundingClientRect();
+   return {ex:Math.round(er.x+er.width/2),ey:Math.round(er.y+30)};}
+ return null;})()"""
+
+JS_GC_PUBLISH = """(()=>{for(const d of document.querySelectorAll('div[role=dialog]')){
+   if(!/crear publicaci|create post/i.test(d.innerText||'')) continue;
+   for(const b of d.querySelectorAll('div[role=button],button')){
+     const t=(b.innerText||'').trim();
+     if(!/^(publicar|post)$/i.test(t)) continue;
+     const r=b.getBoundingClientRect(); if(r.width<80||r.height<24) continue;
+     const x=Math.round(r.x+r.width/2), y=Math.round(r.y+r.height/2);
+     const top=document.elementFromPoint(x,y);
+     return {x:x,y:y,w:Math.round(r.width),h:Math.round(r.height),label:t,
+       disabled:b.getAttribute('aria-disabled'),
+       exposed:!!top&&(b===top||b.contains(top))};}}
+ return null;})()"""
+
+
+def _composer_type(cxt, tab, text):
+    """Abre el compositor del grupo visible y escribe `text` (no publica)."""
+    t0 = time.time()
+    trig = None
+    while time.time() - t0 < 20.0:
+        trig = cxtlib.cdp(cxt, tab, JS_GC_TRIGGER)
+        if isinstance(trig, dict) and trig.get("x"):
+            break
+        settle(cxt, tab)
+    if not isinstance(trig, dict) or not trig.get("x"):
+        return False, {"reason": "sin-compositor"}
+    if not trig.get("exposed"):
+        return False, {"reason": "compositor-cubierto"}
+    cxtlib.click(cxt, tab, trig["x"], trig["y"])
+    t1 = time.time()
+    ed = None
+    while time.time() - t1 < 20.0:
+        ed = cxtlib.cdp(cxt, tab, JS_GC_EDITOR)
+        if isinstance(ed, dict):
+            break
+        settle(cxt, tab)
+    if not isinstance(ed, dict):
+        return False, {"reason": "sin-editor"}
+    cxtlib.click(cxt, tab, ed["ex"], ed["ey"])
+    time.sleep(0.4)
+    cxtlib.call(cxt, "cdptype", {"tabId": tab, "text": text})
+    time.sleep(0.8)
+    return True, {"trigger": trig, "editor": ed}
+
+
+def share_via_group_composer(cxt, tab, group, text, expect="", dry=False, stats=None):
+    """Publica `text` con el compositor del grupo y verifica por permalink.
+
+    Solo texto: el compositor no lleva la foto/post original. La prueba fuerte
+    es el permalink del grupo via la vista member (la unica ruta fiable hoy:
+    el feed del grupo esta virtualizado y su busqueda devuelve un cascaron).
+    """
+    gid = _group_id(group)
+    if not gid:
+        return {"ok": False, "stage": "grupo", "reason": "gid desconocido"}
+    if not (text or "").strip():
+        return {"ok": False, "stage": "texto", "reason": "sin-texto"}
+    cxtlib.call(cxt, "navigate",
+                {"tabId": tab, "url": "https://www.facebook.com/groups/%s/" % gid}, 60)
+    time.sleep(2.0)
+    ok, info = _composer_type(cxt, tab, text)
+    if stats is not None:
+        stats["composer"] = info
+    if not ok:
+        log("   compositor: %s" % info.get("reason"))
+        return {"ok": False, "stage": "composer", "reason": info.get("reason")}
+    pub = None
+    t0 = time.time()
+    while time.time() - t0 < 15.0:
+        cand = cxtlib.cdp(cxt, tab, JS_GC_PUBLISH)
+        if (isinstance(cand, dict) and cand.get("x") and cand.get("exposed")
+                and str(cand.get("disabled") or "").lower() != "true"):
+            pub = cand
+            break
+        settle(cxt, tab)
+    if not pub:
+        log("   compositor: Publicar no expuesto")
+        return {"ok": False, "stage": "composer", "reason": "publicar-no-expuesto"}
+    if dry:
+        log("   compositor: simulacro (texto escrito, no se pulsa Publicar)")
+        return {"ok": True, "dry": True, "published": False,
+                "stage": "composer-dry", "label": group,
+                "x": pub["x"], "y": pub["y"]}
+    before_pids = _visible_pids(cxt, tab)
+    click_ts = int(time.time())
+    log("   compositor: Publicar %r en %d,%d" % (pub.get("label"), pub["x"], pub["y"]))
+    cxtlib.click(cxt, tab, pub["x"], pub["y"])
+    close_all_dialogs(cxt, tab, timeout=15.0, stats=stats)
+    cp = confirm_new_post_permalink(cxt, tab, gid, needle=expect or text[:120],
+                                    fbid="", group=group,
+                                    not_before_ts=click_ts - 120,
+                                    before_pids=before_pids)
+    log("   compositor permalink: %s (%s)" % (cp.get("url") or "-", cp.get("reason")))
+    if cp.get("ok"):
+        return {"ok": True, "published": True, "label": group,
+                "reason": "permalink-nuevo", "permalink": cp.get("url")}
+    return {"ok": False, "published": False, "stage": "publicado-sin-confirmar",
+            "reason": cp.get("reason") or "sin-prueba", "label": group}
+
+
+def _composer_group(cxt, tab, group, dry, text, expect):
+    st0 = {}
+    t0 = now_ms()
+    clean = close_all_dialogs(cxt, tab, stats=st0)
+    trace(group, "cleanup", now_ms() - t0, clean,
+          "" if clean else "dialogos-abiertos", st0, None)
+    if not clean:
+        log("   ABORTO: quedan dialogos abiertos (no publico a ciegas)")
+        return {"ok": False, "stage": "cleanup", "reason": "dialogos-abiertos"}
+    return share_via_group_composer(cxt, tab, group, text, expect=expect,
+                                    dry=dry, stats=st0)
 
 
 def _share_group(cxt, tab, url, group, dry, text, expect):
@@ -2470,10 +2766,14 @@ _PUBLIC_KEYS = ("ok", "published", "dry", "stage", "label", "x", "y", "reason", 
                 "approval_url")
 
 
-def share_target(cxt, tab, post_url, group, dry, text, expect=""):
+def share_target(cxt, tab, post_url, group, dry, text, expect="", mode=None):
     """Un grupo. Devuelve EXACTAMENTE las claves historicas de share_post.py."""
     t0 = now_ms()
-    r = _share_group(cxt, tab, post_url, group, dry, text, expect)
+    mode = (mode or os.environ.get("CXT_SHARE_MODE") or "share").strip().lower()
+    if mode == "composer":
+        r = _composer_group(cxt, tab, group, dry, text, expect)
+    else:
+        r = _share_group(cxt, tab, post_url, group, dry, text, expect)
     trace(group, "group", now_ms() - t0, bool(r.get("ok")), r.get("stage") or r.get("reason") or "")
     if dry or not r.get("ok"):
         # Un simulacro deja el compositor abierto y un fallo puede dejar la pila
@@ -2489,7 +2789,7 @@ def share_target(cxt, tab, post_url, group, dry, text, expect=""):
 
 
 def share_to_targets(post_url, targets, dry=True, text="", expect="", delay=None,
-                     tab=None, cxt=None):
+                     tab=None, cxt=None, mode=None):
     """Comparte una publicacion existente a N grupos; un dict por grupo."""
     cxt = cxt or cxtlib.resolve_cxt()
     if tab is None:
@@ -2498,7 +2798,10 @@ def share_to_targets(post_url, targets, dry=True, text="", expect="", delay=None
     n = len(targets)
     for i, g in enumerate(targets):
         t0 = now_ms()
-        r = _share_group(cxt, tab, post_url, g, dry, text, expect)
+        if (mode or "").strip().lower() == "composer":
+            r = _composer_group(cxt, tab, g, dry, text, expect)
+        else:
+            r = _share_group(cxt, tab, post_url, g, dry, text, expect)
         ms = now_ms() - t0
         step = dict(r)
         step["group"] = g

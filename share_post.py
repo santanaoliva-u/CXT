@@ -38,9 +38,8 @@ def log(msg):
 
 
 # --- wrappers finos: el motor real esta en shared.py -----------------------
-def share_url_group(url, g, dry, text, expect=""):
-    """Identifica la publicacion y la comparte al grupo `g` (motor compartido)."""
-    return shared.share_target(CXT, TAB, url, g, dry, text, expect)
+def share_url_group(url, g, dry, text, expect="", mode=None):
+    return shared.share_target(CXT, TAB, url, g, dry, text, expect, mode=mode)
 
 
 def close_dialog():
@@ -179,6 +178,7 @@ def run_from_cmd(path):
     # FAST por cmd o por entorno. Se fija ANTES de llamar al motor: shared.py
     # lee CXT_FAST en tiempo de llamada.
     fast = bool(cfg.get("fast", False)) or fastmode.enabled()
+    mode = "composer" if cfg.get("composer") else None
     if fast:
         os.environ["CXT_FAST"] = "1"
     if "delay" in cfg:
@@ -247,7 +247,8 @@ def run_from_cmd(path):
                     step = {}
                 else:
                     step = {"group": name}
-                    step.update(share_url_group(url, name, dry, text, cfg.get("expect") or ""))
+                    step.update(share_url_group(url, name, dry, text,
+                                                cfg.get("expect") or "", mode=mode))
                 entry = status_entry(step, gid, name, post_key)
                 st["results"].append(entry)
                 if entry.get("status") == "ok" and not dry:
@@ -297,6 +298,7 @@ def main():
     ap.add_argument("--expect", default="")
     ap.add_argument("--delay", type=float, default=None)
     ap.add_argument("--fast", action="store_true")
+    ap.add_argument("--composer", action="store_true")
     ap.add_argument("--dry", action="store_true", default=True)
     ap.add_argument("--no-dry", dest="dry", action="store_false")
     a = ap.parse_args()
@@ -317,7 +319,8 @@ def main():
     for i, g in enumerate(groups):
         log("[%d/%d] %s" % (i + 1, len(groups), g))
         step = {"group": g}
-        step.update(share_url_group(a.url, g, a.dry, a.text, a.expect))
+        step.update(share_url_group(a.url, g, a.dry, a.text, a.expect,
+                                    mode="composer" if a.composer else None))
         results.append(step)
         if i < len(groups) - 1:
             close_dialog()

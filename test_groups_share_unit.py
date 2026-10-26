@@ -314,6 +314,35 @@ check("pick: notif_id/notif_t se descartan",
           [_cand(500, 2000, "Hola Mundo", "555",
                  url="https://www.facebook.com/groups/9/posts/500/?notif_id=1")],
           "9", needle="hola mundo", not_before_ts=1500) is None)
+# La vista member (/groups/<gid>/user/<uid>/) no pinta DOM y FB recorta el texto
+# con "... Ver mas": exigir needle/fbid daba falso `sin-prueba` en posts SI
+# publicados (visto en vivo con el post 1424504862646745). own=True acepta un id
+# nuevo posterior al click; own=False queda igual de estricto.
+OWN = [_cand(600, 2000, "texto recortado  Ver mas"), _cand(601, 900, "viejo")]
+check("pick: own=True acepta id nuevo sin needle ni fbid",
+      (SH.pick_new_post_permalink(OWN, "9", not_before_ts=1500, own=True) or {}).get("pid") == "600")
+check("pick: own=True sigue rechazando ids anteriores al click",
+      SH.pick_new_post_permalink(OWN, "9", not_before_ts=5000, own=True) is None)
+check("pick: own=True no relaja la puerta por defecto (own=False estricto)",
+      SH.pick_new_post_permalink([_cand(602, 2000, "texto recortado")], "9",
+                                 not_before_ts=1500) is None)
+check("pick: identidad fuerte puntua mas que own",
+      (SH.pick_new_post_permalink([_cand(700, 2000, "texto sin needle"),
+                                   _cand(701, 2000, "Hola Mundo")], "9",
+                                  needle="hola mundo", not_before_ts=1500,
+                                  own=True) or {}).get("pid") == "701")
+import inspect as _inspect
+check("confirm: la ruta member es la que habilita own",
+      'own=(name == "member")' in _inspect.getsource(SH.confirm_new_post_permalink))
+check("needle: emojis entre frases del post no rompen la identidad",
+      SH._needle_match("d n t e o o p s 🔥 ¡oferta en playa del carmen! 🔥 🚪 puerta "
+                       "corrediza de aluminio blanco con vidrio",
+                       "¡oferta en playa del carmen! puerta corrediza de aluminio blanco"))
+check("needle: palabras sueltas y en otro orden no cuentan",
+      not SH._needle_match("blanco aluminio corrediza puerta playa carmen oferta",
+                           "oferta en playa del carmen puerta corrediza aluminio blanco"))
+check("needle: needle corto no usa el camino difuso",
+      not SH._needle_match("mundo y hola", "hola mundo"))
 
 check("veredicto: prueba fuerte gana sobre pendiente y pista",
       SH.classify_send_verdict(proof="permalink-nuevo", weak="composer-cerrado",
@@ -516,6 +545,35 @@ SH.read_approvals = _ORIG_READ
 SH.confirm_new_post_permalink = _ORIG_CONFIRM
 SH.confirm_approval_permalink = _ORIG_DIRECT
 SH._group_id = _ORIG_GID
+
+# --- camino alterno: compositor del grupo ---------------------------------
+# El flujo Compartir dejo 0/10 y run#4 sin rastro; el compositor del propio
+# grupo si publica (permalink verificado a mano). Estos checks fijan el
+# contrato: modo opt-in, guardas de exposicion y verificacion por permalink.
+_src_composer = _inspect.getsource(SH.share_via_group_composer)
+check("composer: exige texto (fail-closed, no toca el navegador)",
+      SH.share_via_group_composer(None, None, "Bazar NENIS Playa del Carmen", "")["reason"]
+      == "sin-texto")
+check("composer: Publicar solo si esta expuesto",
+      "and cand.get(\"exposed\")" in _src_composer
+      and "publicar-no-expuesto" in _src_composer)
+check("composer: verifica por permalink de la vista member",
+      "confirm_new_post_permalink" in _src_composer
+      and "not_before_ts=click_ts - 120" in _src_composer)
+check("composer: JS del editor exige dialog de crear publicacion",
+      "crear publicaci|create post" in SH.JS_GC_EDITOR
+      and 'contenteditable=\"true\"' in SH.JS_GC_EDITOR)
+check("composer: JS de Publicar exige texto exacto y exposicion",
+      "^(publicar|post)$" in SH.JS_GC_PUBLISH and "exposed:!!top" in SH.JS_GC_PUBLISH)
+check("composer: JS del disparador hace scrollIntoView",
+      "scrollIntoView" in SH.JS_GC_TRIGGER and "escribe algo" in SH.JS_GC_TRIGGER)
+_src_target = _inspect.getsource(SH.share_target)
+check("share_target: modo composer enruta al compositor",
+      '_composer_group(cxt, tab, group, dry, text, expect)' in _src_target)
+check("share_target: por defecto sigue el flujo de compartir",
+      '_share_group(cxt, tab, post_url, group, dry, text, expect)' in _src_target)
+check("share_target: sin modo explicito usa CXT_SHARE_MODE",
+      "CXT_SHARE_MODE" in _src_target)
 
 print()
 print("RESULT: " + ("PASS" if not fails else "FAIL " + ",".join(fails)))

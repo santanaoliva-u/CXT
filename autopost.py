@@ -73,6 +73,9 @@ TECHO_CUENTA = MAXDAY
 # Una publicacion por grupo y dia (regla dura anti-spam).
 MAX_GRUPO_DIA = int(os.environ.get("CXT_AUTO_MAX_GRUPO_DIA", 1))
 MAX_GROUPS_PER_DAY = MAX_GRUPO_DIA
+# Tras una ronda real, cuantas parejas `unknown` se revisan con la vista member
+# antes de dar el item por fallido. Cuesta ~30 s cada una: acotado a 3.
+RECONCILE_UNKNOWN_MAX = int(os.environ.get("CXT_AUTO_RECONCILE_MAX", 3))
 # Enfriamiento por PUBLICACION (misma publicacion en el mismo grupo) y por
 # GRUPO (publicaciones distintas): 6 h cada uno, segun decision del jefe.
 COOLDOWN_POST = int(float(os.environ.get("CXT_AUTO_COOLDOWN_H", "6")) * 3600 * 1000)
@@ -632,6 +635,7 @@ def share_cmd_payload(item, gids, post_key):
         "delay": (fastmode.knobs()["inter_group_delay_s"] if fast_pacing
                   else auto_delay_s()),
         "fast": fast,
+        "composer": bool(item.get("composer")),
         "limit": group_limit(item.get("limit")),
         "filter": item.get("filter") or "",
         "gids": [str(g) for g in gids or []],
@@ -1829,6 +1833,95 @@ def reconcile_ledger(evidence_fn=None, db=None, use_browser=True):
     return out
 
 
+def reconcile_unknown(evidence_fn=None, db=None, use_browser=True, limit=20,
+                      post_key="", gids=None):
+    """Revisa parejas `unknown` buscando pruebas de lo YA publicado.
+
+    Es solo lectura de Facebook: NUNCA publica ni reintenta. Si la vista de mis
+    posts en el grupo muestra el permalink, la pareja sube a `ok` con evidencia;
+    si no hay prueba se queda como estaba (no se inventa exito ni error). El
+    llamador decide cuando lanzarlo: cuesta ~30 s por pareja.
+    """
+    rows = ledger.unresolved(limit=limit, post_key=post_key, gids=gids, db=db)
+    out = {"checked": len(rows), "ok": 0, "left": 0, "errors": 0}
+    for row in rows:
+        evidence = None
+        try:
+            if evidence_fn is not None:
+                evidence = evidence_fn(row)
+            elif use_browser:
+                evidence = _default_evidence(row, db=db)
+        except Exception as e:
+            out["errors"] += 1
+            log("reconcile-unknown err gid=%s (%s)" % (row.get("gid"), e))
+        url = str((evidence or {}).get("proof") or "")
+        if not url:
+            out["left"] += 1
+            continue
+        try:
+            changed = ledger.upgrade(str(row.get("gid")), row.get("post_key"),
+                                     url, ledger.now_ms(), db)
+        except Exception as e:
+            out["errors"] += 1
+            log("reconcile-unknown write err gid=%s (%s)" % (row.get("gid"), e))
+            continue
+        if changed:
+            out["ok"] += 1
+            log("reconcile-unknown: gid=%s sube a ok (%s)"
+                % (row.get("gid"), url))
+    return out
+
+
+def _reconcile_round_unknowns(applied, post_key, limit=None):
+    """Intenta acreditar los `unknown` que acaba de dejar una ronda real.
+
+    Un `unknown` es terminal para el selector: si la prueba fuerte fallo por un
+    falso negativo, el item se marca error para siempre aunque el post exista
+    (paso en la ronda real del grupo 636651664765406). Aqui se relee la vista
+    member y, solo si aparece el permalink, la fila pasa a `ok`. NUNCA publica.
+    """
+    rows = [r for r in (applied.get("results") or [])
+            if not r.get("ok") and r.get("status") in ("unknown", "pending")]
+    targets = []
+    for row in rows:
+        gid = str(row.get("gid") or "")
+        if gid and gid not in targets:
+            targets.append(gid)
+    cap = RECONCILE_UNKNOWN_MAX if limit is None else int(limit)
+    targets = targets[:max(0, cap)]
+    if not targets:
+        return applied
+    try:
+        out = reconcile_unknown(post_key=post_key, gids=targets,
+                                limit=len(targets))
+    except Exception as e:
+        log("ronda: no pude revisar unknown (%s)" % e)
+        return applied
+    if not out.get("ok"):
+        log("ronda: %d unknown sin prueba tras revisar" % out.get("left", 0))
+        return applied
+    try:
+        pm = ledger.post_group_map()
+    except Exception as e:
+        log("ronda: ledger ilegible tras revisar (%s)" % e)
+        return applied
+    proved = {}
+    for row in rows:
+        gid = str(row.get("gid") or "")
+        cur = pm.get((gid, post_key)) or {}
+        if gid in targets and cur.get("status") == "ok" and cur.get("proof"):
+            row["ok"] = True
+            row["status"] = "ok"
+            row["proof"] = cur.get("proof")
+            proved[gid] = cur.get("proof")
+    if proved:
+        applied["published"] = len([r for r in applied["results"] if r.get("ok")])
+        applied["unresolved"] = [u for u in (applied.get("unresolved") or [])
+                                if str(u) not in proved]
+        log("ronda: %d unknown acreditado(s) por la vista member" % len(proved))
+    return applied
+
+
 def _ledger_maps():
     """Lee (grupos, post_group); si la BD no existe la crea y siembra una vez.
 
@@ -2045,7 +2138,7 @@ def _label(item):
     return (item.get("url") or item.get("expect") or item.get("text") or "")[:80]
 
 
-_ITEM_FIELDS = ("url", "expect", "filter", "limit", "text", "dry", "fast")
+_ITEM_FIELDS = ("url", "expect", "filter", "limit", "text", "dry", "fast", "composer")
 
 
 def public_items(items):
@@ -2389,6 +2482,8 @@ def _publish(st, q, items, item, now, gids=None, post_key=""):
             st["dom"]["injected"] = int(st["dom"].get("injected", 0)) + 1
             applied = apply_round_results(gid_list, post_key, raw, batch=batch,
                                           ts=now, dry=dry)
+            if not dry and post_key and gid_list:
+                applied = _reconcile_round_unknowns(applied, post_key)
             published = max(int((raw or {}).get("published", 0) or 0),
                             int(applied.get("published", 0) or 0))
             pend = int(applied.get("pending", 0) or 0)
@@ -2774,12 +2869,22 @@ def main(argv=None):
     ap.add_argument("--cmd", default="")
     ap.add_argument("--clear-halt", action="store_true",
                     help="borra autopost.halt.json (parada dura) y sale")
+    ap.add_argument("--reconcile-unknown", action="store_true",
+                    help="revisa parejas unknown con evidencia ya publicada"
+                         " (solo lectura, no publica) y sale")
+    ap.add_argument("--limit", type=int, default=20,
+                    help="maximo de parejas unknown a revisar")
     a = ap.parse_args(argv)
     cmd_path = os.path.abspath(a.cmd) if a.cmd else CMD
 
     if a.clear_halt:
         existed = clear_halt()
         log("halt %s" % ("borrado" if existed else "no existia"))
+        return
+
+    if a.reconcile_unknown:
+        out = reconcile_unknown(limit=max(1, int(a.limit)))
+        print(json.dumps(out, ensure_ascii=False))
         return
 
     # §3.4: un solo worker aunque `autopost.pid` se haya perdido. El flock vive
