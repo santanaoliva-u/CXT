@@ -575,6 +575,23 @@ check("share_target: por defecto sigue el flujo de compartir",
 check("share_target: sin modo explicito usa CXT_SHARE_MODE",
       "CXT_SHARE_MODE" in _src_target)
 
+# --- prueba: rueda real en el feed y sin ruta search ----------------------
+# Medido: window.scrollBy no monta el feed virtualizado (0 articulos) y la
+# busqueda del grupo devuelve posts ajenos y viejos. Estos checks fijan ambas
+# decisiones para que un refactor no las revierta.
+_src_feed = _inspect.getsource(SH.feed_photo_count)
+check("feed: scrollea con rueda CDP, no con window.scrollBy",
+      "_wheel(cxt, tab)" in _src_feed and "scrollBy" not in _src_feed)
+check("feed: la rueda despacha mouseWheel por CDP",
+      "mouseWheel" in _inspect.getsource(SH._wheel))
+_src_perm = _inspect.getsource(SH.confirm_new_post_permalink)
+check("permalink: solo ruta member (search descartada)",
+      "groups/%s/search" not in _src_perm and "descarto" in _src_perm)
+check("permalink: member sigue habilitando own",
+      'own=(name == "member")' in _src_perm)
+check("permalink: la vista member no se da por vacia antes de 10 s",
+      "empty_streak >= 4 and time.time() - route_start >= 10.0" in _src_perm)
+
 print()
 print("RESULT: " + ("PASS" if not fails else "FAIL " + ",".join(fails)))
 sys.exit(0 if not fails else 1)

@@ -22,7 +22,6 @@ import json
 import os
 import re
 import time
-from urllib.parse import quote_plus
 
 import cxtlib
 import fastmode
@@ -2101,6 +2100,14 @@ def capture_page_png(cxt, tab, path, timeout=45):
     return True, {"path": path, "bytes": len(raw)}
 
 
+def _wheel(cxt, tab, dy=900, x=500, y=600, pause=1.2):
+    """Scroll REAL por CDP: window.scrollBy no monta el feed virtualizado."""
+    cxtlib.call(cxt, "cdp", {"tabId": tab, "method": "Input.dispatchMouseEvent",
+                             "params": {"type": "mouseWheel", "x": x, "y": y,
+                                        "deltaX": 0, "deltaY": dy}}, 30)
+    time.sleep(pause)
+
+
 def feed_photo_count(cxt, tab, gid, fbid="", needle="", rounds=6, detail=None,
                      author="", group="", shot_path=""):
     """Cuenta copias reales en el FEED del grupo. -1 si no se pudo leer.
@@ -2143,8 +2150,7 @@ def feed_photo_count(cxt, tab, gid, fbid="", needle="", rounds=6, detail=None,
             if c > 0:
                 break
         if i < max(1, rounds) - 1:
-            cxtlib.cdp(cxt, tab, "(()=>{window.scrollBy(0,900);return true;})()")
-            time.sleep(1.2)
+            _wheel(cxt, tab)
     if detail is not None:
         if best_info is not None:
             detail.update(best_info)
@@ -2221,9 +2227,11 @@ def confirm_new_post_permalink(cxt, tab, gid, needle="", fbid="", group="",
                                not_before_ts=None, budget_s=36.0, before_pids=None):
     """Busca el post NUEVO por permalink cuando el feed no lo prueba.
 
-    Rutas probadas que SI listan el post propio: la pagina del miembro dentro
-    del grupo y la busqueda del grupo. Presupuesto acotado; sin candidato nuevo
-    devuelve ok=False ('sin-prueba') y jamas convierte la duda en exito."""
+    Unica ruta util: la pagina del miembro dentro del grupo. La busqueda del
+    grupo se descarto porque devuelve posts ajenos y viejos (medido: 5 candidatos
+    todos anteriores al envio), asi que solo gastaba el presupuesto. Presupuesto
+    acotado; sin candidato nuevo devuelve ok=False ('sin-prueba') y jamas
+    convierte la duda en exito."""
     t0 = now_ms()
     gid = str(gid or "").strip()
     sig = {"uid": "", "routes": [], "candidates": 0}
@@ -2247,10 +2255,6 @@ def confirm_new_post_permalink(cxt, tab, gid, needle="", fbid="", group="",
     routes = []
     if uid:
         routes.append(("member", "https://www.facebook.com/groups/%s/user/%s/" % (gid, uid), 18.0))
-    q = " ".join((needle or "").split())[:160]
-    if q:
-        routes.append(("search", "https://www.facebook.com/groups/%s/search/?q=%s"
-                       % (gid, quote_plus(q)), 12.0))
     if not routes:
         trace(group or "", "confirm_post", now_ms() - t0, False, "sin-uid", stats, sig)
         return {"ok": False, "count": 0, "reason": "sin-uid", "signals": sig}
@@ -2262,14 +2266,17 @@ def confirm_new_post_permalink(cxt, tab, gid, needle="", fbid="", group="",
         nav_ms = int(min(30000, max(1000, left * 1000))) if fast else 30000
         nav_wait = min(45.0, max(2.0, left + 0.5)) if fast else 45
         cxtlib.call(cxt, "navigate", {"tabId": tab, "url": url, "timeout": nav_ms}, nav_wait)
-        route_end = min(deadline, time.time() + min(cap, left))
+        route_start = time.time()
+        route_end = min(deadline, route_start + min(cap, left))
         route = {"route": name, "url": url, "candidates": 0, "winner": ""}
         empty = False
+        empty_streak = 0
         while time.time() < route_end:
             stats["tries"] += 1
             raw = cxtlib.cdp(cxt, tab, js_post_candidates(gid), timeout=10)
             got = raw if isinstance(raw, list) else []
             if got:
+                empty_streak = 0
                 route["candidates"] = len(got)
                 seen.extend(got)
                 sig["candidates"] = len(seen)
@@ -2290,10 +2297,13 @@ def confirm_new_post_permalink(cxt, tab, gid, needle="", fbid="", group="",
                            "signals": sig, "ms": el, "source": name})
                     return out
             elif name == "member":
-                # La ruta member devolvio 0 candidatos: esperar el tope es tiempo
-                # perdido. Se corta ya y se pasa a la ruta search.
-                empty = True
-                break
+                # La vista member monta tarde (React): una lectura vacia al
+                # principio es normal. Solo se da por vacia tras 4 sondeos
+                # seguidos; antes se cortaba al primero y se perdia el post real.
+                empty_streak += 1
+                if empty_streak >= 4 and time.time() - route_start >= 10.0:
+                    empty = True
+                    break
             time.sleep(1.0)
         if empty:
             route["empty"] = True
