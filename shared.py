@@ -2639,7 +2639,8 @@ def _composer_type(cxt, tab, text):
     return True, {"trigger": trig, "editor": ed}
 
 
-def share_via_group_composer(cxt, tab, group, text, expect="", dry=False, stats=None):
+def share_via_group_composer(cxt, tab, group, text, expect="", dry=False, stats=None,
+                               post_url=""):
     """Publica `text` con el compositor del grupo y verifica por permalink.
 
     Solo texto: el compositor no lleva la foto/post original. La prueba fuerte
@@ -2654,6 +2655,10 @@ def share_via_group_composer(cxt, tab, group, text, expect="", dry=False, stats=
     text = (text or "").strip() or (expect or "").strip()
     if not text:
         return {"ok": False, "stage": "texto", "reason": "sin-texto"}
+    # El compositor no sube la foto del post original: el enlace queda como
+    # referencia para que el grupo vea la publicacion completa.
+    if post_url and post_url not in text:
+        text = text.rstrip() + "\n\n" + post_url
     cxtlib.call(cxt, "navigate",
                 {"tabId": tab, "url": "https://www.facebook.com/groups/%s/" % gid}, 60)
     time.sleep(2.0)
@@ -2697,7 +2702,7 @@ def share_via_group_composer(cxt, tab, group, text, expect="", dry=False, stats=
             "reason": cp.get("reason") or "sin-prueba", "label": group}
 
 
-def _composer_group(cxt, tab, group, dry, text, expect):
+def _composer_group(cxt, tab, group, dry, text, expect, post_url=""):
     st0 = {}
     t0 = now_ms()
     clean = close_all_dialogs(cxt, tab, stats=st0)
@@ -2707,7 +2712,7 @@ def _composer_group(cxt, tab, group, dry, text, expect):
         log("   ABORTO: quedan dialogos abiertos (no publico a ciegas)")
         return {"ok": False, "stage": "cleanup", "reason": "dialogos-abiertos"}
     return share_via_group_composer(cxt, tab, group, text, expect=expect,
-                                    dry=dry, stats=st0)
+                                    dry=dry, stats=st0, post_url=post_url)
 
 
 def _share_group(cxt, tab, url, group, dry, text, expect):
@@ -2778,7 +2783,7 @@ def share_target(cxt, tab, post_url, group, dry, text, expect="", mode=None):
     t0 = now_ms()
     mode = (mode or os.environ.get("CXT_SHARE_MODE") or "share").strip().lower()
     if mode == "composer":
-        r = _composer_group(cxt, tab, group, dry, text, expect)
+        r = _composer_group(cxt, tab, group, dry, text, expect, post_url=post_url)
     else:
         r = _share_group(cxt, tab, post_url, group, dry, text, expect)
     trace(group, "group", now_ms() - t0, bool(r.get("ok")), r.get("stage") or r.get("reason") or "")
@@ -2806,7 +2811,7 @@ def share_to_targets(post_url, targets, dry=True, text="", expect="", delay=None
     for i, g in enumerate(targets):
         t0 = now_ms()
         if (mode or "").strip().lower() == "composer":
-            r = _composer_group(cxt, tab, g, dry, text, expect)
+            r = _composer_group(cxt, tab, g, dry, text, expect, post_url=post_url)
         else:
             r = _share_group(cxt, tab, post_url, g, dry, text, expect)
         ms = now_ms() - t0

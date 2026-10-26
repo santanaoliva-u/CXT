@@ -573,7 +573,7 @@ check("composer: JS del disparador hace scrollIntoView",
       "scrollIntoView" in SH.JS_GC_TRIGGER and "escribe algo" in SH.JS_GC_TRIGGER)
 _src_target = _inspect.getsource(SH.share_target)
 check("share_target: modo composer enruta al compositor",
-      '_composer_group(cxt, tab, group, dry, text, expect)' in _src_target)
+      "_composer_group(cxt, tab, group, dry, text, expect" in _src_target)
 check("share_target: por defecto sigue el flujo de compartir",
       '_share_group(cxt, tab, post_url, group, dry, text, expect)' in _src_target)
 check("share_target: sin modo explicito usa CXT_SHARE_MODE",
@@ -602,6 +602,21 @@ check("share_group: sin linea base del feed (ahorro ~100 s/grupo)",
       and "se omite la linea base" in _src_sharegroup)
 check("permalink: la vista member no se da por vacia antes de 10 s",
       "empty_streak >= 4 and time.time() - route_start >= 10.0" in _src_perm)
+
+# El compositor no sube la foto: el enlace del post original es la referencia
+# que conserva el contenido. Estos checks fijan que se adjunte y se propague.
+_src_comp2 = _inspect.getsource(SH.share_via_group_composer)
+check("composer: acepta post_url y lo adjunta al texto",
+      'post_url=""' in _src_comp2
+      and 'text.rstrip() + "\\n\\n" + post_url' in _src_comp2)
+check("composer: no duplica el enlace si ya viene en el texto",
+      "post_url not in text" in _src_comp2)
+_src_grp = _inspect.getsource(SH._composer_group)
+check("composer: _composer_group reenvia post_url",
+      'post_url=""' in _src_grp and "post_url=post_url" in _src_grp)
+_src_tgt2 = _inspect.getsource(SH.share_target)
+check("share_target: modo composer propaga post_url",
+      "_composer_group(cxt, tab, group, dry, text, expect, post_url=post_url)" in _src_tgt2)
 
 print()
 print("RESULT: " + ("PASS" if not fails else "FAIL " + ",".join(fails)))
