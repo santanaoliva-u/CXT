@@ -554,6 +554,10 @@ _src_composer = _inspect.getsource(SH.share_via_group_composer)
 check("composer: exige texto (fail-closed, no toca el navegador)",
       SH.share_via_group_composer(None, None, "Bazar NENIS Playa del Carmen", "")["reason"]
       == "sin-texto")
+check("composer: reintenta el click del trigger una vez",
+      "for attempt in range(2)" in _inspect.getsource(SH._composer_type))
+check("composer: el texto cae a expect cuando la cola no trae text",
+      'or (expect or "").strip()' in _src_composer)
 check("composer: Publicar solo si esta expuesto",
       "and cand.get(\"exposed\")" in _src_composer
       and "publicar-no-expuesto" in _src_composer)

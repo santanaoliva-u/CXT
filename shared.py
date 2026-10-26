@@ -2626,14 +2626,22 @@ def _composer_type(cxt, tab, text):
         return False, {"reason": "sin-compositor"}
     if not trig.get("exposed"):
         return False, {"reason": "compositor-cubierto"}
-    cxtlib.click(cxt, tab, trig["x"], trig["y"])
-    t1 = time.time()
+    # El primer click puede caer antes de que React enganche el handler (pagina
+    # recien navegada): se reintenta una vez con el trigger releido.
     ed = None
-    while time.time() - t1 < 20.0:
-        ed = cxtlib.cdp(cxt, tab, JS_GC_EDITOR)
+    for attempt in range(2):
+        cxtlib.click(cxt, tab, trig["x"], trig["y"])
+        t1 = time.time()
+        while time.time() - t1 < 12.0:
+            ed = cxtlib.cdp(cxt, tab, JS_GC_EDITOR)
+            if isinstance(ed, dict):
+                break
+            settle(cxt, tab)
         if isinstance(ed, dict):
             break
-        settle(cxt, tab)
+        again = cxtlib.cdp(cxt, tab, JS_GC_TRIGGER)
+        if isinstance(again, dict) and again.get("x") and again.get("exposed"):
+            trig = again
     if not isinstance(ed, dict):
         return False, {"reason": "sin-editor"}
     cxtlib.click(cxt, tab, ed["ex"], ed["ey"])
@@ -2653,7 +2661,10 @@ def share_via_group_composer(cxt, tab, group, text, expect="", dry=False, stats=
     gid = _group_id(group)
     if not gid:
         return {"ok": False, "stage": "grupo", "reason": "gid desconocido"}
-    if not (text or "").strip():
+    # El texto de la cola puede venir vacio y solo traer `expect` (el copy del
+    # post): sin esta caida el compositor era inservible desde la cola real.
+    text = (text or "").strip() or (expect or "").strip()
+    if not text:
         return {"ok": False, "stage": "texto", "reason": "sin-texto"}
     cxtlib.call(cxt, "navigate",
                 {"tabId": tab, "url": "https://www.facebook.com/groups/%s/" % gid}, 60)
@@ -2686,7 +2697,7 @@ def share_via_group_composer(cxt, tab, group, text, expect="", dry=False, stats=
     log("   compositor: Publicar %r en %d,%d" % (pub.get("label"), pub["x"], pub["y"]))
     cxtlib.click(cxt, tab, pub["x"], pub["y"])
     close_all_dialogs(cxt, tab, timeout=15.0, stats=stats)
-    cp = confirm_new_post_permalink(cxt, tab, gid, needle=expect or text[:120],
+    cp = confirm_new_post_permalink(cxt, tab, gid, needle=(expect or text)[:120],
                                     fbid="", group=group,
                                     not_before_ts=click_ts - 120,
                                     before_pids=before_pids)
