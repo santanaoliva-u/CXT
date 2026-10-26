@@ -802,6 +802,7 @@ async function renderAuto() {
       } else {
         tail = stt === "error" ? " · error" + (it.tries ? " · intento " + it.tries : "") : "";
       }
+      if (it.composer) tail += " · compositor (texto)";
       sp.textContent = who + nm + tail;
       sp.title = (it.error ? it.error + "\n" : "") + (it.url || "");
       li.append(ic, sp);
@@ -812,7 +813,15 @@ async function renderAuto() {
         const b2 = document.createElement("button");
         b2.className = "btn stop"; b2.textContent = "✕"; b2.title = "Quitar de la cola";
         b2.addEventListener("click", async () => { await send("autopostSet", { action: "del", url: it.url }); autoMsg = "✓ quitado de la cola"; itemsSig = ""; tick(); });
-        li.append(b1, b2);
+        const b3 = document.createElement("button");
+        b3.className = "btn sec"; b3.textContent = "✎";
+        b3.title = it.composer ? "Publicar con el compositor del grupo (activado): pulsa para volver a compartir" : "Publicar con el compositor del grupo (solo texto)";
+        b3.addEventListener("click", async () => {
+          const r = await send("autopostSet", { action: "composer", url: it.url, value: !it.composer });
+          autoMsg = r && r.ok === false ? "✗ no se pudo cambiar el modo" : (it.composer ? "✓ vuelve a compartir" : "✓ publicará con el compositor");
+          itemsSig = ""; tick();
+        });
+        li.append(b1, b2, b3);
       }
       ulI.appendChild(li);
     });

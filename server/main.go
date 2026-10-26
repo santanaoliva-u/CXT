@@ -804,6 +804,45 @@ func (s *server) handleAutopostSet(w http.ResponseWriter, r *http.Request) {
 			}
 			ensureAutopost()
 			writeJSON(w, 200, map[string]any{"ok": true, "retry": true, "rearmed": n})
+		case "composer":
+			// Marca el item para publicar con el compositor del grupo: el flujo
+			// Compartir no crea la publicacion en esta cuenta (0/10 el 26-oct).
+			idx, hasIdx := st["index"].(float64)
+			value, _ := st["value"].(bool)
+			s.queueMu.Lock()
+			q := readAutoQueue()
+			i := int(idx)
+			found := hasIdx
+			if !hasIdx {
+				if u, _ := st["url"].(string); u != "" {
+					for k, it := range q.Items {
+						if m, isMap := it.(map[string]any); isMap && m["url"] == u {
+							i = k
+							found = true
+							break
+						}
+					}
+				}
+			}
+			ok := found && i >= 0 && i < len(q.Items)
+			if ok {
+				m, isMap := q.Items[i].(map[string]any)
+				if isMap {
+					m["composer"] = value
+				} else {
+					ok = false
+				}
+			}
+			var err error
+			if ok {
+				err = writeAutoQueue(q)
+			}
+			s.queueMu.Unlock()
+			if err != nil {
+				http.Error(w, "no se pudo escribir", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, 200, map[string]any{"ok": ok, "composer": value})
 		case "del":
 			// Borra un item puntual de la cola por indice (lista del popup).
 			idx, _ := st["index"].(float64)
