@@ -2562,74 +2562,191 @@ def _share_one(cxt, tab, group, dry, text, expect, verify=None, post_url=""):
 # algo...") si publica: verificado con permalink y vista member. Estas sondas
 # son el equivalente web de lo que se probo a mano; se mantienen aparte para no
 # tocar el flujo de compartir, que sigue siendo el camino por defecto.
-JS_GC_TRIGGER = """(()=>{const c=[];
- for(const e of document.querySelectorAll('[role=button]')){
-   const t=(e.innerText||e.getAttribute('aria-label')||'').trim();
-   if(!/^escribe algo|^write something/i.test(t)) continue;
-   if(t.length>40) continue;
-   const r=e.getBoundingClientRect();
-   if(r.width<200||r.height<20) continue;
-   c.push({e:e,w:Math.round(r.width)});}
- if(!c.length) return null;
- c.sort((a,b)=>b.w-a.w);
- const el=c[0].e; el.scrollIntoView({block:'center'});
- const r=el.getBoundingClientRect();
- const x=Math.round(r.x+r.width/2), y=Math.round(r.y+r.height/2);
- const top=document.elementFromPoint(x,y);
- return {x:x,y:y,w:Math.round(r.width),h:Math.round(r.height),
-   exposed:!!top&&(el===top||el.contains(top)||top.contains(el))};})()"""
+JS_GC_TRIGGERS = """(()=>{const c=[];
+  for(const e of document.querySelectorAll('[role=button]')){
+    const t=(e.innerText||e.getAttribute('aria-label')||'').trim();
+    if(!/^escribe algo|^write something/i.test(t)) continue;
+    if(t.length>40) continue;
+    const r=e.getBoundingClientRect();
+    if(r.width<200||r.height<20) continue;
+    c.push({e:e,w:Math.round(r.width)});}
+  if(!c.length) return [];
+  c.sort((a,b)=>b.w-a.w);
+  const out=[];
+  for(const it of c.slice(0,5)){
+    const el=it.e;
+    try{el.scrollIntoView({block:'center'});}catch(err){}
+    const r=el.getBoundingClientRect();
+    const x=Math.round(r.x+r.width/2), y=Math.round(r.y+r.height/2);
+    const top=document.elementFromPoint(x,y);
+    out.push({x:x,y:y,w:Math.round(r.width),h:Math.round(r.height),
+      exposed:!!top&&(el===top||el.contains(top)||top.contains(el))});}
+  return out;})()"""
 
-JS_GC_EDITOR = """(()=>{for(const d of document.querySelectorAll('div[role=dialog]')){
-   if(!/crear publicaci|create post/i.test(d.innerText||'')) continue;
-   const r=d.getBoundingClientRect(); if(r.width<200) continue;
-   const ed=d.querySelector('[contenteditable="true"]'); if(!ed) continue;
-   const er=ed.getBoundingClientRect();
-   return {ex:Math.round(er.x+er.width/2),ey:Math.round(er.y+30)};}
- return null;})()"""
+JS_GC_TRIGGER = "(()=>{const a=%s;return (a&&a.length)?a[0]:null;})()" % JS_GC_TRIGGERS
+
+# El click por coordenadas se lo comia el feed virtualizado (medido 26-oct: la
+# fila "Escribe algo..." se movia al pulsar y no abria nada); el click directo
+# sobre el nodo si dispara el handler de React y abre compositor o modal.
+JS_GC_TRIGGER_JS = """(()=>{const c=[];
+  for(const e of document.querySelectorAll('[role=button]')){
+    const t=(e.innerText||e.getAttribute('aria-label')||'').trim();
+    if(!/^escribe algo|^write something/i.test(t)) continue;
+    if(t.length>40) continue;
+    const r=e.getBoundingClientRect();
+    if(r.width<200||r.height<20) continue;
+    c.push(e);}
+  if(!c.length) return 0;
+  let n=0;
+  for(const el of c.slice(0,2)){try{el.click();n++;}catch(err){}}
+  return n;})()"""
+
+JS_GC_EDITOR = """(()=>{const vis=e=>{const r=e.getBoundingClientRect();
+    return r.width>0&&r.height>0&&r.y<innerHeight&&r.y+r.height>0;};
+  for(const d of document.querySelectorAll('div[role=dialog]')){
+    if(!/crear publicaci|create post/i.test(d.innerText||'')) continue;
+    const r=d.getBoundingClientRect(); if(r.width<200) continue;
+    const ed=d.querySelector('[contenteditable="true"]'); if(!ed) continue;
+    const er=ed.getBoundingClientRect();
+    return {ex:Math.round(er.x+er.width/2),ey:Math.round(er.y+30),inline:false};}
+  const best=[];
+  for(const ed of document.querySelectorAll('[contenteditable="true"]')){
+    if(!vis(ed)) continue;
+    const r=ed.getBoundingClientRect();
+    if(r.width<200||r.height<30) continue;
+    let p=ed,hit=false;
+    for(let i=0;i<12&&p;i++,p=p.parentElement){
+      if(/crea una publicaci|crear publicaci|grupo p[u\u00fa]blico|publicar/i.test(p.innerText||'')){hit=true;break;}}
+    if(!hit) continue;
+    best.push({r:r,area:r.width*r.height});}
+  if(!best.length) return null;
+  best.sort((a,b)=>b.area-a.area);
+  const r=best[0].r;
+  return {ex:Math.round(r.x+r.width/2),ey:Math.round(r.y+30),inline:true};})()"""
 
 JS_GC_PUBLISH = """(()=>{for(const d of document.querySelectorAll('div[role=dialog]')){
-   if(!/crear publicaci|create post/i.test(d.innerText||'')) continue;
-   for(const b of d.querySelectorAll('div[role=button],button')){
-     const t=(b.innerText||'').trim();
-     if(!/^(publicar|post)$/i.test(t)) continue;
-     const r=b.getBoundingClientRect(); if(r.width<80||r.height<24) continue;
-     const x=Math.round(r.x+r.width/2), y=Math.round(r.y+r.height/2);
-     const top=document.elementFromPoint(x,y);
-     return {x:x,y:y,w:Math.round(r.width),h:Math.round(r.height),label:t,
-       disabled:b.getAttribute('aria-disabled'),
-       exposed:!!top&&(b===top||b.contains(top))};}}
- return null;})()"""
+    if(!/crear publicaci|create post/i.test(d.innerText||'')) continue;
+    for(const b of d.querySelectorAll('div[role=button],button')){
+      const t=(b.innerText||'').trim();
+      if(!/^(publicar|post)$/i.test(t)) continue;
+      const r=b.getBoundingClientRect(); if(r.width<80||r.height<24) continue;
+      const x=Math.round(r.x+r.width/2), y=Math.round(r.y+r.height/2);
+      const top=document.elementFromPoint(x,y);
+      return {x:x,y:y,w:Math.round(r.width),h:Math.round(r.height),label:t,
+        disabled:b.getAttribute('aria-disabled'),
+        exposed:!!top&&(b===top||b.contains(top))};}}
+  const cs=[];
+  for(const b of document.querySelectorAll('div[role=button],button')){
+    const t=(b.innerText||'').trim();
+    if(!/^(publicar|post)$/i.test(t)) continue;
+    const r=b.getBoundingClientRect();
+    if(r.width<60||r.height<24||r.y>innerHeight||r.y+r.height<0) continue;
+    const x=Math.round(r.x+r.width/2), y=Math.round(r.y+r.height/2);
+    const top=document.elementFromPoint(x,y);
+    cs.push({x:x,y:y,w:Math.round(r.width),h:Math.round(r.height),label:t,
+      disabled:b.getAttribute('aria-disabled'),
+      exposed:!!top&&(b===top||b.contains(top))});}
+  if(!cs.length) return null;
+  cs.sort((a,b)=>(b.exposed?1:0)-(a.exposed?1:0));
+  return cs[0];})()"""
+
+
+_BODY_TEXT_LEN_JS = ("(()=>{try{const b=document.body;"
+                     "return b?(b.innerText||'').length:0}catch(e){return 0}})()")
+
+# El body crece por partes: con solo medir longitud, un esqueleto de 210 chars
+# pasaba el umbral y el trigger se buscaba en una pagina aun vacia (medido en el
+# E2E del 26-oct: 66 s sin trigger y la pagina lista justo despues).
+_COMPOSER_MOUNT_JS = """(()=>{try{const b=document.body;if(!b)return {len:0,ready:false};
+  const t=b.innerText||'';
+  return {len:t.length,
+    ready:/escribe algo|write something|grupo p[u\u00fa]blico/i.test(t)};}
+  catch(e){return {len:0,ready:false}}})()"""
+
+# Estado del compositor para el log: sin esto un `sin-editor` no decia si el
+# click no abrio nada o si el dialogo existia con otra forma (paso en el E2E
+# del 26-oct: la sonda lo veia en 2 s y el worker no lo veia en 24 s).
+_COMPOSER_DIAG_JS = """(()=>{const out={ed:0,dlgs:[]};
+  out.ed=document.querySelectorAll('[contenteditable="true"]').length;
+  for(const d of document.querySelectorAll('div[role=dialog]')){
+    const r=d.getBoundingClientRect();
+    if(r.width<200||r.height<80) continue;
+    out.dlgs.push({w:Math.round(r.width),h:Math.round(r.height),
+      x:Math.round(r.x),y:Math.round(r.y),
+      ce:d.querySelectorAll('[contenteditable="true"]').length,
+      txt:(d.innerText||'').slice(0,70).replace(/\\n/g,'|')});}
+  return out;})()"""
 
 
 def _composer_type(cxt, tab, text):
-    """Abre el compositor del grupo visible y escribe `text` (no publica)."""
+    """Abre el compositor del grupo visible y escribe `text` (no publica).
+
+    Presupuestos por entorno (CXT_COMPOSER_MOUNT_S, CXT_COMPOSER_WAIT_S): la
+    pagina del grupo monta por partes (esqueleto sin marcador) y hay que
+    esperarla antes de buscar el trigger; despues Facebook puede servir varias
+    filas "Escribe algo..." y solo algunas abren el modal.
+    """
+    wait_s = float(os.environ.get("CXT_COMPOSER_WAIT_S") or 60)
+    mount_s = float(os.environ.get("CXT_COMPOSER_MOUNT_S") or 45)
+    t_mount = time.time()
+    body_len = 0
+    while time.time() - t_mount < mount_s:
+        st = cxtlib.cdp(cxt, tab, _COMPOSER_MOUNT_JS)
+        st = st if isinstance(st, dict) else {}
+        body_len = int(st.get("len") or 0)
+        if st.get("ready") and body_len > 400:
+            break
+        settle(cxt, tab)
     t0 = time.time()
     trig = None
-    while time.time() - t0 < 20.0:
-        trig = cxtlib.cdp(cxt, tab, JS_GC_TRIGGER)
-        if isinstance(trig, dict) and trig.get("x"):
+    cands = []
+    while time.time() - t0 < wait_s:
+        got = cxtlib.cdp(cxt, tab, JS_GC_TRIGGERS)
+        cands = got if isinstance(got, list) else []
+        if cands:
+            trig = cands[0]
             break
         settle(cxt, tab)
     if not isinstance(trig, dict) or not trig.get("x"):
-        return False, {"reason": "sin-compositor"}
+        return False, {"reason": "sin-compositor",
+                       "waited": round(time.time() - t0, 1), "body": body_len}
+    log("   compositor: %d trigger(s) tras %.1fs %s"
+        % (len(cands), time.time() - t0,
+           json.dumps([{k: c.get(k) for k in ("x", "y", "w", "exposed")}
+                       for c in cands][:3])))
     if not trig.get("exposed"):
         return False, {"reason": "compositor-cubierto"}
-    # El primer click puede caer antes de que React enganche el handler (pagina
-    # recien navegada): se reintenta una vez con el trigger releido.
+    # Facebook sirve varias filas "Escribe algo..." y no todas abren el modal
+    # (visto 26-oct: la mas ancha no hacia nada y otra si abria el compositor).
     ed = None
-    for attempt in range(2):
-        cxtlib.click(cxt, tab, trig["x"], trig["y"])
-        t1 = time.time()
-        while time.time() - t1 < 12.0:
-            ed = cxtlib.cdp(cxt, tab, JS_GC_EDITOR)
-            if isinstance(ed, dict):
-                break
-            settle(cxt, tab)
+    njs = cxtlib.cdp(cxt, tab, JS_GC_TRIGGER_JS)
+    log("   compositor: click js sobre %s trigger(s)" % (njs,))
+    t1 = time.time()
+    while time.time() - t1 < 10.0:
+        ed = cxtlib.cdp(cxt, tab, JS_GC_EDITOR)
         if isinstance(ed, dict):
             break
-        again = cxtlib.cdp(cxt, tab, JS_GC_TRIGGER)
-        if isinstance(again, dict) and again.get("x") and again.get("exposed"):
-            trig = again
+        settle(cxt, tab)
+    if not isinstance(ed, dict):
+        for ci, cand in enumerate([c for c in cands
+                                   if c.get("x") and c.get("exposed")][:4]):
+            cxtlib.click(cxt, tab, cand["x"], cand["y"])
+            t1 = time.time()
+            while time.time() - t1 < 8.0:
+                ed = cxtlib.cdp(cxt, tab, JS_GC_EDITOR)
+                if isinstance(ed, dict):
+                    break
+                settle(cxt, tab)
+            if isinstance(ed, dict):
+                trig = cand
+                log("   compositor: editor via trigger %d (%sx%s @%s,%s)"
+                    % (ci + 1, cand.get("w"), cand.get("h"),
+                       cand.get("x"), cand.get("y")))
+                break
+            log("   compositor: trigger %d sin editor (%.1fs) %s"
+                % (ci + 1, time.time() - t1,
+                   json.dumps(cxtlib.cdp(cxt, tab, _COMPOSER_DIAG_JS),
+                              ensure_ascii=False)[:400]))
     if not isinstance(ed, dict):
         return False, {"reason": "sin-editor"}
     cxtlib.click(cxt, tab, ed["ex"], ed["ey"])

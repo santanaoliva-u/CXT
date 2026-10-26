@@ -554,8 +554,9 @@ _src_composer = _inspect.getsource(SH.share_via_group_composer)
 check("composer: exige texto (fail-closed, no toca el navegador)",
       SH.share_via_group_composer(None, None, "Bazar NENIS Playa del Carmen", "")["reason"]
       == "sin-texto")
-check("composer: reintenta el click del trigger una vez",
-      "for attempt in range(2)" in _inspect.getsource(SH._composer_type))
+check("composer: reintenta abriendo el compositor por varias vias",
+      "JS_GC_TRIGGER_JS" in _inspect.getsource(SH._composer_type)
+      and "[:4]" in _inspect.getsource(SH._composer_type))
 check("composer: el texto cae a expect cuando la cola no trae text",
       'or (expect or "").strip()' in _src_composer)
 check("composer: Publicar solo si esta expuesto",
@@ -571,6 +572,22 @@ check("composer: JS de Publicar exige texto exacto y exposicion",
       "^(publicar|post)$" in SH.JS_GC_PUBLISH and "exposed:!!top" in SH.JS_GC_PUBLISH)
 check("composer: JS del disparador hace scrollIntoView",
       "scrollIntoView" in SH.JS_GC_TRIGGER and "escribe algo" in SH.JS_GC_TRIGGER)
+# Medido en el E2E de la cola (26-oct): el body monta por partes, hay varias
+# filas "Escribe algo..." y el click por coordenadas se pierde cuando el feed se
+# recoloca; ademas Facebook abre a veces el compositor inline en vez del modal.
+check("composer: espera por marcador de pagina y no solo por longitud",
+      "_COMPOSER_MOUNT_JS" in _inspect.getsource(SH._composer_type)
+      and "ready" in SH._COMPOSER_MOUNT_JS)
+check("composer: prueba los candidatos del disparador en orden",
+      "JS_GC_TRIGGERS" in _inspect.getsource(SH._composer_type)
+      and "slice(0,5)" in SH.JS_GC_TRIGGERS)
+check("composer: click js sobre el nodo antes del click por coordenadas",
+      "JS_GC_TRIGGER_JS" in _inspect.getsource(SH._composer_type)
+      and ".click()" in SH.JS_GC_TRIGGER_JS)
+check("composer: editor acepta modal o inline",
+      "inline:false" in SH.JS_GC_EDITOR and "inline:true" in SH.JS_GC_EDITOR)
+check("composer: Publicar cae a boton global si no hay modal",
+      "cs.sort" in SH.JS_GC_PUBLISH)
 _src_target = _inspect.getsource(SH.share_target)
 check("share_target: modo composer enruta al compositor",
       "_composer_group(cxt, tab, group, dry, text, expect" in _src_target)
@@ -617,6 +634,19 @@ check("composer: _composer_group reenvia post_url",
 _src_tgt2 = _inspect.getsource(SH.share_target)
 check("share_target: modo composer propaga post_url",
       "_composer_group(cxt, tab, group, dry, text, expect, post_url=post_url)" in _src_tgt2)
+
+# La pagina del grupo tarda 12-15 s en montar (medido: body vacio los primeros
+# 12 s) y con el tope fijo de 20 s el worker caia en `sin-compositor` aunque el
+# trigger si existiera despues. Estos checks fijan la espera configurable y el
+# dato de diagnostico (cuanto se espero + tamano del body).
+_src_ctype = _inspect.getsource(SH._composer_type)
+check("composer: presupuesto del trigger configurable por entorno",
+      "CXT_COMPOSER_WAIT_S" in _src_ctype)
+check("composer: espera a que monte el body antes de buscar el trigger",
+      "CXT_COMPOSER_MOUNT_S" in _src_ctype
+      and "_COMPOSER_MOUNT_JS" in _src_ctype)
+check("composer: sin-compositor informa waited y body",
+      '"waited"' in _src_ctype and '"body"' in _src_ctype)
 
 print()
 print("RESULT: " + ("PASS" if not fails else "FAIL " + ",".join(fails)))
