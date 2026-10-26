@@ -1417,23 +1417,11 @@ def submit(cxt, tab, dry, text="", stats=None, verify=None,
                 # La pista debil se conserva como senal, nunca como prueba.
                 log("   modo fast: se omite la verificacion de feed")
             else:
-                # 2) feed del grupo: una copia MAS que la linea base.
-                v = verify_feed(cxt, tab, verify.get("gid", ""), verify.get("fbid", ""),
-                                before=verify.get("before"), needle=needle,
-                                author=verify.get("author", ""),
-                                group=verify.get("group", ""),
-                                shot_path=os.environ.get("CXT_FEED_SHOT") or "")
-                verify["after"] = v.get("count")
-                verify["verdict"] = v
-                if stats is not None:
-                    stats["feed"] = v
-                log("   feed del grupo: antes=%s despues=%s (%s)"
-                    % (verify.get("before"), v.get("count"), v.get("reason")))
-                if v.get("ok"):
-                    proof = "feed"
-                    verdict_reason = ""
-                else:
-                    verdict_reason = v.get("reason") or verdict_reason
+                # El feed NO se usa como prueba: medido, se lee (readable) pero
+                # el post nuevo no cae en la ventana visible (orden "Mas
+                # relevantes") y cada intento cuesta ~100 s. La prueba fuerte es
+                # el permalink de la vista member.
+                log("   feed del grupo: no se usa como prueba (no ve el post nuevo)")
     elif weak and not pending_hint:
         # Sin gid no hay permalink que buscar. La pista debil NUNCA concede
         # ok=True: se reporta `publicado-sin-confirmar` (ni exito ni fallo).
@@ -2150,7 +2138,7 @@ def feed_photo_count(cxt, tab, gid, fbid="", needle="", rounds=6, detail=None,
             if c > 0:
                 break
         if i < max(1, rounds) - 1:
-            _wheel(cxt, tab)
+            _wheel(cxt, tab, dy=1400)
     if detail is not None:
         if best_info is not None:
             detail.update(best_info)
@@ -2162,7 +2150,7 @@ def feed_photo_count(cxt, tab, gid, fbid="", needle="", rounds=6, detail=None,
 
 
 def verify_feed(cxt, tab, gid, fbid="", before=None, needle="", author="", group="",
-                shot_path="", rounds=6):
+                shot_path="", rounds=3):
     """Veredicto de la prueba por feed: ok SOLO si el conteo sube.
 
     - `feed-ilegible`: no se pudo leer el feed (cuerpo vacio/sin feed).
@@ -2746,13 +2734,11 @@ def _share_group(cxt, tab, url, group, dry, text, expect):
                 before = None
                 log("   modo fast: se omite la linea base del feed")
             else:
-                tb = now_ms()
+                # Sin linea base del feed: la verificacion por feed se descarto
+                # (no ve el post nuevo) y medirla costaba ~100 s por grupo.
                 author = _me_name(cxt, tab)
-                before = feed_photo_count(cxt, tab, gid, fbid, needle=needle,
-                                          author=author, group=group)
-                trace(group, "feed_baseline", now_ms() - tb, before >= 0,
-                      "" if before >= 0 else "feed", None, {"feed_before": before})
-                log("   feed del grupo antes de publicar: %s copia(s)" % before)
+                before = None
+                log("   feed del grupo: se omite la linea base (no se usa como prueba)")
             verify = {"gid": gid, "fbid": fbid,
                       "before": before if before is not None and before >= 0 else None,
                       "author": author, "group": group, "needle": needle}

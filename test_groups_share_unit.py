@@ -585,7 +585,7 @@ check("share_target: sin modo explicito usa CXT_SHARE_MODE",
 # decisiones para que un refactor no las revierta.
 _src_feed = _inspect.getsource(SH.feed_photo_count)
 check("feed: scrollea con rueda CDP, no con window.scrollBy",
-      "_wheel(cxt, tab)" in _src_feed and "scrollBy" not in _src_feed)
+      "_wheel(cxt, tab" in _src_feed and "scrollBy" not in _src_feed)
 check("feed: la rueda despacha mouseWheel por CDP",
       "mouseWheel" in _inspect.getsource(SH._wheel))
 _src_perm = _inspect.getsource(SH.confirm_new_post_permalink)
@@ -593,6 +593,13 @@ check("permalink: solo ruta member (search descartada)",
       "groups/%s/search" not in _src_perm and "descarto" in _src_perm)
 check("permalink: member sigue habilitando own",
       'own=(name == "member")' in _src_perm)
+_src_submit = _inspect.getsource(SH.submit)
+check("submit: el feed ya no concede prueba (solo permalink)",
+      "verify_feed(cxt, tab" not in _src_submit and "no ve el post nuevo" in _src_submit)
+_src_sharegroup = _inspect.getsource(SH._share_group)
+check("share_group: sin linea base del feed (ahorro ~100 s/grupo)",
+      "feed_photo_count(cxt, tab" not in _src_sharegroup
+      and "se omite la linea base" in _src_sharegroup)
 check("permalink: la vista member no se da por vacia antes de 10 s",
       "empty_streak >= 4 and time.time() - route_start >= 10.0" in _src_perm)
 
