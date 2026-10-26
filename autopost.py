@@ -1494,16 +1494,57 @@ def _kill_child(proc=None):
             pass
 
 
-def _run_share_child(cmd, budget, env):
+def share_log_path(batch=""):
+    """Log de la ronda: mismo token que el cmd, bajo DIR/logs.
+
+    Antes el hijo iba con stdout/stderr a DEVNULL y una ronda fallida dejaba
+    el log del worker mudo (solo se veia el status final). El hijo pasa por
+    su propio log para poder reconstruir que hizo en cada grupo.
+    """
+    token = "".join(ch for ch in str(batch or "") if ch.isalnum() or ch in "-_")
+    if not token:
+        token = "r%d-%d" % (os.getpid(), int(time.time() * 1000))
+    return os.path.join(DIR, "logs", "share-%s.log" % token)
+
+
+def _prune_share_logs(keep=20):
+    """Conserva los `keep` logs de ronda mas recientes (best-effort)."""
+    folder = os.path.join(DIR, "logs")
+    try:
+        names = [n for n in os.listdir(folder) if n.startswith("share-")
+                 and n.endswith(".log")]
+        names.sort(key=lambda n: os.path.getmtime(os.path.join(folder, n)))
+        for name in names[:-keep]:
+            try:
+                os.remove(os.path.join(folder, name))
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _run_share_child(cmd, budget, env, log_path=None):
     """Lanza share_post y deja su Popen en `_CHILD` mientras corre."""
     global _CHILD
     if subprocess.run is not _ORIG_RUN:
         subprocess.run(cmd, capture_output=True, text=True,
                        timeout=budget, env=env)
         return
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, env=env,
-                            start_new_session=True)
+    proc = None
+    sink = subprocess.DEVNULL
+    log_f = None
+    if log_path:
+        try:
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            log_f = open(log_path, "ab")
+            sink = log_f
+        except OSError as e:
+            log("share log err %s" % e)
+            log_f = None
+            sink = subprocess.DEVNULL
+    proc = subprocess.Popen(cmd, stdout=sink,
+                            stderr=subprocess.STDOUT if log_f else subprocess.DEVNULL,
+                            env=env, start_new_session=True)
     _CHILD = proc
     try:
         proc.wait(timeout=budget)
@@ -1512,6 +1553,11 @@ def _run_share_child(cmd, budget, env):
         raise
     finally:
         _CHILD = None
+        if log_f is not None:
+            try:
+                log_f.close()
+            except OSError:
+                pass
 
 
 def run_share(item):
@@ -1584,9 +1630,11 @@ def run_share(item):
     # del usuario; se guardan las activas y se restauran pase lo que pase.
     # Con CXT_BACKGROUND=1 no hay nada que guardar: el hijo no activa.
     prev_active = None if bg else active_tabs()
+    share_log = share_log_path(item.get("_batch") or "")
+    log("share log: %s" % share_log)
     try:
         _run_share_child(["python3", "-u", SHARE, "--cmd", cmd_path],
-                         budget, env)
+                         budget, env, log_path=share_log)
     except subprocess.TimeoutExpired:
         share_st = _share_status_since(t0)
         msg = ("timeout tras %ss (presupuesto %ss/grupo x %d grupos)"
@@ -1608,6 +1656,7 @@ def run_share(item):
             os.remove(cmd_path)
         except OSError as e:
             log("cmd cleanup err " + str(e))
+        _prune_share_logs()
 
     share_st = _share_status_since(t0)
     if share_st is None:
@@ -2449,14 +2498,19 @@ def _tick(st, cmd_path, sig=None, db=None):
     if cmd.get("action") == "next":
         # SIGUIENTE (popup): adelanta la proxima publicacion. P7: nunca a 0;
         # el suelo de 60 s evita colapsar la pausa anti-ban de 4-8 min.
-        st["next_at"] = max(int(st.get("next_at") or 0), now + KICK_MIN_MS)
+        # ASIGNAR, no max(): con max() un next_at ya programado (interval_min
+        # 15 min) nunca baja y el boton SIGUIENTE no hacia nada. El suelo de
+        # 60 s sigue intacto (nunca 0).
+        st["next_at"] = now + KICK_MIN_MS
         log("cmd next: forzar ahora")
     if cmd.get("action") == "retry":
         # REINTENTAR (popup): rearma un item fallido borrando su intento de error
         # y adelanta la publicacion. Un intento "hecho" no se borra (clear_attempt).
         u = cmd.get("url") or ""
         if u and clear_attempt(u):
-            st["next_at"] = max(int(st.get("next_at") or 0), now + KICK_MIN_MS)
+            # Igual que SIGUIENTE: reasignar (max() dejaba la ronda ya
+            # programada en su hora y el reintento no adelantaba nada).
+            st["next_at"] = now + KICK_MIN_MS
             log("cmd retry: %s" % u[:60])
 
     # Senal de cola: el daemon reescribio autoqueue.json (enqueue/del/clear/

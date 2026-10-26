@@ -56,7 +56,7 @@ class ShareContextTest(unittest.TestCase):
         self.assertIn("elementFromPoint", js)
         self.assertIn("await new Promise", js)
         self.assertIn("scrollIntoView", js)
-        self.assertIn("matching.find", js)
+        self.assertIn("pool.find", js)
 
     def test_nonpost_close_keeps_all_post_modals(self):
         js = SH.JS_TOP_NONPOST_CLOSE
@@ -89,6 +89,19 @@ class ShareContextTest(unittest.TestCase):
         self.assertIn("const posts=", js)
         self.assertIn("!posts.includes(d)", js)
         self.assertIn("others.length", js)
+
+    def test_select_group_fails_closed_without_picker(self):
+        js = SH.js_select_group("Bazar Playa del Carmen de todo un poco")
+        # sin dialog de picker se aborta: nunca se hace click en el feed
+        self.assertIn("if(!scope) return null;", js)
+        # la fila se elige por score (checkbox/role), no por exigir la palabra "grupo"
+        self.assertIn("cands.sort((a,b)=>b.pri-a.pri", js)
+        self.assertIn("return {t", js)
+
+    def test_picker_debug_dumps_candidates(self):
+        js = SH.js_picker_debug()
+        self.assertIn("items:out", js)
+        self.assertIn("role", js)
 
 
 if __name__ == "__main__":

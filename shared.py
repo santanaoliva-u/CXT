@@ -94,7 +94,9 @@ def poll_js(cxt, tab, expr, timeout=4.0, tick=TICK, step=None):
     while True:
         tries += 1
         v = cxtlib.cdp(cxt, tab, expr)
-        if v:
+        # Un dict {reason:...} es un aborto explicito, no un exito: si el modal
+        # aun esta montando, hay que reintentar hasta que aparezca el boton.
+        if v and not (isinstance(v, dict) and v.get("reason") and v.get("x") is None):
             return v, {"tries": tries, "hit": True, "timed_out": False}
         if time.time() - t0 >= timeout:
             el = time.time() - t0
@@ -115,7 +117,9 @@ def poll_js_settle(cxt, tab, expr, timeout=4.0, tick=TICK, step=None):
         tries += 1
         settle(cxt, tab)
         v = cxtlib.cdp(cxt, tab, expr)
-        if v:
+        # Un dict {reason:...} es un aborto explicito, no un exito: si el modal
+        # aun esta montando, hay que reintentar hasta que aparezca el boton.
+        if v and not (isinstance(v, dict) and v.get("reason") and v.get("x") is None):
             return v, {"tries": tries, "hit": True, "timed_out": False}
         if time.time() - t0 >= timeout:
             if step:
@@ -170,12 +174,15 @@ def js_find_share(expect=""):
   const modals=dialogs.filter(d=>d.querySelector('[role=article]')||
     /publicaci\\u00f3n de|post by/i.test((d.innerText||'').slice(0,3000)));
   const matching=modals.filter(m=>!w||squash(m.innerText||'').includes(w));
-  if(modals.length && !matching.length)
+  // En un permalink canonico la URL ya identifica el post; Facebook puede
+  // truncar u omitir el caption en el DOM. No abortar solo porque el texto
+  // no case: usar el modal del permalink y validar el punto de Compartir.
+  const pm=/\\/posts\\/|\\/permalink|\\/share\\/p\\//.test(location.href);
+  if(modals.length && !matching.length && !pm)
     return {reason:'post-no-coincide',scope:'dialog'};
-  // El post puede estar en dos capas (fondo full-screen + tarjeta). El boton
-  // Compartir vive en una sola: elegir la capa que realmente lo contiene.
-  const modal=matching.find(m=>all.some(x=>m.contains(x)))||
-    matching[matching.length-1]||null;
+  const pool=matching.length?matching:(pm?modals:[]);
+  const modal=pool.find(m=>all.some(x=>m.contains(x)))||
+    pool[pool.length-1]||null;
   let el=null, scope='none', box=null;
   if(modal){
     const inside=all.filter(x=>modal.contains(x));
@@ -246,7 +253,7 @@ def js_share_context(expect="", post_url=""):
    const r=e.getBoundingClientRect();
    if(r.width>=300&&r.width<=900&&r.height>=150&&r.height<=1200){root=e;break;}}}
  if(!root) root=b.parentElement||b;
- const text=(root.innerText||'').replace(/\s+/g,' ').trim();
+ const text=(root.innerText||'').replace(/\\s+/g,' ').trim();
  const hrefs=[...root.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')||'');
  let postId='';
  let m=postUrl.match(/pfbid[0-9A-Za-z]+/); if(m) postId=m[0];
@@ -256,9 +263,14 @@ def js_share_context(expect="", post_url=""):
  const link=postId?hrefs.some(h=>h.indexOf(postId)>=0)
    :hrefs.some(h=>/\/posts\/|\/permalink|\/share\/p\//.test(h));
  const needle=!!want&&squash(text).indexOf(want)>=0;
+ const prefix=want.slice(0,10);
+ const prefixHit=!!prefix&&squash(text).indexOf(prefix)>=0;
  const arts=[...root.querySelectorAll('[role=article]')].filter(vis).length;
- return {reason:(link||needle)?'ok':'composer-sin-post',link:link,needle:needle,
-   articles:arts,postId:postId,text:text.slice(0,800)};})()"""
+ const media=[...root.querySelectorAll('img,video')].filter(vis).filter(e=>{
+   const r=e.getBoundingClientRect();return r.width>=80&&r.height>=60;}).length;
+ const mediaOk=media>0&&prefixHit;
+ return {reason:(link||needle||mediaOk)?'ok':'composer-sin-post',link:link,needle:needle,
+   prefix:prefixHit,articles:arts,media:media,postId:postId,text:text.slice(0,800)};})()"""
 
 
 def classify_share_context(ev):
@@ -331,7 +343,9 @@ JS_PICKER = "(()=>{" + JS_VISIBLE + """
  const inp=[...document.querySelectorAll('input[type=search]')].filter(vis).find(i=>{
    const a=((i.getAttribute('aria-label')||'')+' '+(i.placeholder||'')).toLowerCase();
    const r=i.getBoundingClientRect();
-   return r.x>200 && r.y>40 && /grupo|group/.test(a);});
+   // El picker nuevo pone el buscador a x~95, no a x>200. Validar por
+   // placeholder/aria y visibilidad, no por una coordenada fija.
+   return r.y>40 && /grupo|group/.test(a);});
  if(!inp) return null;
  inp.scrollIntoView({block:'center'});
  inp.focus();
@@ -412,7 +426,15 @@ JS_SUBMIT = "(()=>{" + JS_VISIBLE + JS_EFF + """
  const chip=groupChips.length?groupChips[groupChips.length-1]:null;
  const path=(e)=>{const a=[];for(let x=e;x&&x!==document.body;x=x.parentElement)a.push(x);return a;};
  let root=null,b=null;
- if(chip){
+ for(const c of cands){
+   const rr=c.getBoundingClientRect();
+   const cx=Math.round(rr.x+rr.width/2),cy=Math.round(rr.y+Math.round(rr.height*0.4));
+   if(cx<0||cy<0||cx>=innerWidth||cy>=innerHeight) continue;
+   const top=document.elementFromPoint(cx,cy);
+   if(top&&(top===c||c.contains(top))){b=c;break;}
+ }
+ if(b){root=b.closest('div[role=dialog]')||b.parentElement;}
+ if(!b&&chip){
    const anc=path(cands[cands.length-1]);
    for(let x=chip;x;x=x.parentElement){if(anc.indexOf(x)>=0){root=x;break;}}
    const inRoot=cands.filter(c=>root&&root.contains(c));
@@ -515,7 +537,13 @@ JS_TOP_NONPOST_CLOSE = "(()=>{" + JS_VISIBLE + """
 
 # Cuenta solo capas no-post (menu/picker/compositor); el post modal no cuenta.
 JS_NONPOST_COUNT = "(()=>{" + JS_VISIBLE + """
- const dialogs=[...document.querySelectorAll('div[role=dialog]')].filter(vis);
+ const isChat=(t)=>/no le[ií]dos|messenger|\\bchats?\\b/i.test(t);
+ const isAuto=(t)=>/crear publicaci[oó]n|create post|compartir en|compartir ahora|share now|publicar|publicaci[oó]n de|post by|share/i.test(t);
+ const dialogs=[...document.querySelectorAll('div[role=dialog]')].filter(vis).filter(e=>{
+   if(e.closest('[data-cxt-auto-ui]')) return false;
+   const t=(e.innerText||'').replace(/\\s+/g,' ');
+   return isAuto(t) && !(isChat(t)&&!/crear publicaci[oó]n|publicar|compartir en/i.test(t));
+ });
  const posts=dialogs.filter(d=>d.querySelector('[role=article]')||
    /publicaci\\u00f3n de|post by/i.test((d.innerText||'').slice(0,3000)));
  const others=dialogs.filter(d=>!posts.includes(d));
@@ -569,7 +597,7 @@ JS_PUBLISH_SIGNAL = "(()=>{" + JS_VISIBLE + """
 JS_PENDING_NOTICE = "(()=>{" + JS_VISIBLE + r"""
  const re=/(pendiente\s+de\s+aprobaci[oó]n|aprobaci[oó]n\s+(del|de un)\s+administrador|en\s+espera\s+de\s+aprobaci[oó]n|pending\s+approval|waiting\s+for\s+approval)/i;
  for(const e of [...document.querySelectorAll('div[role=alert],div[role=status],div[role=dialog]')].filter(vis)){
-   const t=(e.innerText||'').replace(/\s+/g,' ');if(re.test(t))return t.slice(0,200);}
+   const t=(e.innerText||'').replace(/\\s+/g,' ');if(re.test(t))return t.slice(0,200);}
  return null;})()"""
 
 # APROBACION por admin: un grupo deja la publicacion pendiente y dias/horas
@@ -579,7 +607,7 @@ JS_PENDING_NOTICE = "(()=>{" + JS_VISIBLE + r"""
 JS_APPROVALS = r"""(()=>{
  try{
   const out=[],seen={};
-  const clean=(s)=>((s||'')+'').replace(/\s+/g,' ').trim();
+  const clean=(s)=>((s||'')+'').replace(/\\s+/g,' ').trim();
   const ap=/aprob(?:ó|o)\s+tu\s+publicaci[oó]n\s+en\s+/i;
   const groupOf=(t)=>{const m=clean(t).match(/aprob(?:ó|o)\s+tu\s+publicaci[oó]n\s+en\s+(.+)/i);
     return m?clean(m[1]).slice(0,160):'';};
@@ -621,7 +649,7 @@ JS_APPROVALS = r"""(()=>{
 JS_APPROVAL_POST = r"""(()=>{
 const author=__AUTHOR__,needle=__NEEDLE__;
 const norm=(s)=>(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-  .replace(/[\u200b-\u200f\u2060\ufeff\u00ad]/g,'').replace(/\s+/g,' ').trim().toLowerCase();
+  .replace(/[\u200b-\u200f\u2060\ufeff\u00ad]/g,'').replace(/\\s+/g,' ').trim().toLowerCase();
 const vis=(el)=>{if(!el)return false;const r=el.getBoundingClientRect();
   return r.width>0&&r.height>0&&getComputedStyle(el).visibility!=='hidden';};
 const count=(hay,n)=>{if(!n)return 0;let i=-1,c=0;
@@ -647,11 +675,17 @@ def js_approval_post(author="", needle=""):
 JS_COMPOSER_GONE = ("(()=>{const t=document.body.innerText||'';"
                     "return !/crear publicaci[oó]n|create post/i.test(t);})()")
 
-# Conteo REAL de dialogos visibles (TODOS, sin filtrar por texto): la limpieza
+# Conteo de dialogos de publicacion/compartir (ignora chats y la UI de CXT): la limpieza
 # solo puede afirmar "limpio" cuando este numero es 0. El body.innerText y
 # JS_STACK no sirven para eso: dejan clones con texto dentro que nunca cuentan.
 JS_DIALOG_COUNT = "(()=>{" + JS_VISIBLE + """
- const d=[...document.querySelectorAll('div[role=dialog]')].filter(vis);
+ const isChat=(t)=>/no le[ií]dos|messenger|\bchats?\b/i.test(t);
+ const isAuto=(t)=>/crear publicaci[oó]n|create post|compartir en|compartir ahora|share now|publicar|publicaci[oó]n de|post by|share/i.test(t);
+ const d=[...document.querySelectorAll('div[role=dialog]')].filter(vis).filter(e=>{
+   if(e.closest('[data-cxt-auto-ui]')) return false;
+   const t=(e.innerText||'').replace(/\\s+/g,' ');
+   return isAuto(t) && !(isChat(t)&&!/crear publicaci[oó]n|publicar|compartir en/i.test(t));
+ });
  return d.length;})()"""
 
 # Compositor REAL (aria-label) y boton Publicar, ambos efectivamente visibles.
@@ -770,31 +804,92 @@ def js_click(cxt, tab, x, y):
 
 
 def js_select_group(name):
-    """Selecciona el grupo dentro del picker con .click() directo, sin coordenadas."""
+    """Selecciona el grupo dentro del picker con .click() directo, sin coordenadas.
+
+    NO se exige la palabra "grupo/group" en la fila: el picker nuevo muestra a
+    menudo SOLO el nombre del grupo, y esa exigencia producia `reason: row`
+    aunque la fila estuviera delante. Se puntua la fila (checkbox > role ARIA)
+    y se pulsa la mas especifica (texto mas corto / area menor)."""
     n = json.dumps(name)
     return "(()=>{" + JS_VISIBLE + """
- const norm=(s)=>(s||'').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toLowerCase();
+ const norm=(s)=>(s||'').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toLowerCase().replace(/\\s+/g,' ').trim();
  const tgt=norm(""" + n + """);
- const hit=(t)=>t===tgt||t.includes(tgt)||(tgt.length>6&&tgt.includes(t));
+ const hit=(t)=>t===tgt||t.includes(tgt)||(tgt.length>6&&t.includes(tgt));
  const inp=[...document.querySelectorAll('input[type=search]')].filter(vis).find(i=>{
    const a=((i.getAttribute('aria-label')||'')+' '+(i.placeholder||'')).toLowerCase();
    return /grupo|group/.test(a);});
- const scope=inp?inp.closest('div[role=dialog]'):null;
- if(!scope) return null;
- const q=(sel)=>[...scope.querySelectorAll(sel)].filter(vis);
- for(const b of q('div[role=button]')){
-   const cb=b.querySelector('input[type=checkbox]');
-   if(cb && /grupo|group/i.test(b.textContent||'') && hit(norm(b.textContent||''))){cb.click();return {t:(b.textContent||'').trim().slice(0,80),checked:cb.checked};}
+ const scope=(inp&&inp.closest('div[role=dialog]'))||null;
+ if(!scope) return null;                      // sin picker NO se busca en el feed
+ const press=(el,cb)=>{
+   if(cb){if(cb.checked) return true; cb.click(); return cb.checked!==false;}
+   let e=el;
+   for(let i=0;i<6&&e&&e!==scope;i++){
+     const role=(e.getAttribute('role')||'').toLowerCase();
+     if(role==='button'||role==='option'||role==='listitem'||role==='checkbox'
+        ||e.tagName==='LABEL'||e.tagName==='A'||e.hasAttribute('tabindex')){e.click();return true;}
+     e=e.parentElement;
+   }
+   el.click();
+   return true;
+ };
+ const cands=[];
+ const add=(el)=>{
+   const t=norm(el.textContent||'');
+   if(!t||t.length>220||!hit(t)) return;
+   const r=el.getBoundingClientRect();
+   if(r.width<80||r.height<18) return;
+   const cb=el.querySelector('input[type=checkbox],input[type=radio]');
+   const role=(el.getAttribute('role')||el.tagName).toLowerCase();
+   const pri=(cb?4:0)+(role==='button'?3:role==='option'?3:role==='listitem'?2:role==='label'?2:0);
+   cands.push({el:el,cb:cb,pri:pri,len:t.length,area:Math.max(1,Math.round(r.width*r.height))});
+ };
+ for(const e of scope.querySelectorAll('div[role=button],div[role=option],div[role=listitem],li,label,a[role=button],div[role=checkbox]')){
+   if(vis(e)) add(e);
  }
- for(const cb of q('input[type=checkbox]')){
-   let e=cb;
-   for(let i=0;i<7&&e;i++){e=e.parentElement;if(e&&/grupo|group/i.test(e.textContent||'')&&hit(norm(e.textContent||''))){cb.click();return {t:(e.textContent||'').trim().slice(0,80),checked:cb.checked};}}
+ if(!cands.length){
+   // Ultimo recurso: nodo mas profundo cuyo texto case (pickers sin roles ARIA).
+   for(const e of scope.querySelectorAll('div,span,td')){
+     if(!vis(e)) continue;
+     const t=norm(e.textContent||''); if(!t||t.length>220||!hit(t)) continue;
+     let deep=false;
+     for(const c of e.children){const ct=norm(c.textContent||'');if(ct&&hit(ct)){deep=true;break;}}
+     if(!deep) add(e);
+   }
  }
- for(const b of q('div[role=button],a[role=button]')){
-   const t=(b.textContent||'').replace(/\\s+/g,' ').trim();
-   if(/grupo|group/i.test(t)&&hit(norm(t))){b.click();return {t:t.slice(0,80),clicked:true};}
+ if(!cands.length) return null;
+ cands.sort((a,b)=>b.pri-a.pri||a.len-b.len||a.area-b.area);
+ const c=cands[0];
+ const ok=press(c.el,c.cb);
+ return {t:(c.el.textContent||'').trim().slice(0,80),clicked:ok,
+   checked:c.cb?c.cb.checked:null,pri:c.pri,cands:cands.length};})()"""
+
+
+def js_picker_debug():
+    """Dump acotado del picker: sirve para saber por que no caso la fila."""
+    return "(()=>{" + JS_VISIBLE + """
+ const inp=[...document.querySelectorAll('input[type=search]')].filter(vis).find(i=>{
+   const a=((i.getAttribute('aria-label')||'')+' '+(i.placeholder||'')).toLowerCase();
+   return /grupo|group/.test(a);});
+ const scope=(inp&&inp.closest('div[role=dialog]'))||document.body;
+ const out=[];
+ const push=(e,why)=>{if(out.length>=14)return;const r=e.getBoundingClientRect();
+   out.push({why:why,tag:e.tagName.toLowerCase(),role:e.getAttribute('role')||'',
+     cb:!!e.querySelector('input[type=checkbox],input[type=radio]'),
+     txt:(e.textContent||'').replace(/\\s+/g,' ').trim().slice(0,70),
+     x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)});};
+ for(const e of scope.querySelectorAll('div[role=button],div[role=option],div[role=listitem],li,label')){
+   if(vis(e)) push(e,'row');
  }
- return null;})()"""
+ let n=0;
+ for(const e of scope.querySelectorAll('div,span')){
+   if(out.length>=14||n>=40) break;
+   n++;
+   if(!vis(e)) continue;
+   const t=(e.textContent||'').replace(/\\s+/g,' ').trim();
+   if(t&&t.length<=90) push(e,'txt');
+ }
+ return {input:inp?{value:inp.value,aria:(inp.getAttribute('aria-label')||''),ph:inp.placeholder||''}:null,
+   items:out};})()"""
 
 def _stable_row(cxt, tab, name, timeout=3.0):
     """Espera una fila que casa y esta quieta (mismo rect 2 sondeos seguidos).
@@ -889,11 +984,15 @@ def open_group_option(cxt, tab, stats=None):
         return True
     t0 = time.time()
     tries = 0
-    while time.time() - t0 < 6.0:
+    while time.time() - t0 < 12.0:
         tries += 1
+        # El paso previo del menu puede haber abierto ya el picker (click de
+        # texto sobre el tile): si esta, no hay nada que abrir.
+        if cxtlib.cdp(cxt, tab, JS_PICKER):
+            return True
         if cxtlib.cdp(cxt, tab, JS_GROUP_CLICK):
             settle(cxt, tab)
-            v, info = poll_js(cxt, tab, JS_PICKER, timeout=3.0, tick=TICK,
+            v, info = poll_js(cxt, tab, JS_PICKER, timeout=6.0, tick=TICK,
                               step="group_option")
             if stats is not None:
                 stats.update(info)
@@ -905,8 +1004,8 @@ def open_group_option(cxt, tab, stats=None):
                 return True
             if stats is not None:
                 stats["tries"] = tries
-            print("group_option: el tile Grupo no abrio el buscador; aborto", flush=True)
-            return False
+            print("group_option: el tile Grupo no abrio el buscador; reintento", flush=True)
+            continue
         time.sleep(TICK)
     if cxtlib.cdp(cxt, tab, JS_PICKER):
         return True
@@ -984,8 +1083,8 @@ def _isolate_submit(cxt, tab, stats=None):
     closed = 0
     s = cxtlib.cdp(cxt, tab, JS_SUBMIT)
     t0 = time.time()
-    while (isinstance(s, dict) and s.get("reason") == "cubierto"
-           and closed < 4 and time.time() - t0 < 6.0):
+    while (isinstance(s, dict) and s.get("reason") in ("cubierto", "invisible")
+           and closed < 4 and time.time() - t0 < 10.0):
         c = cxtlib.cdp(cxt, tab, JS_STALE_CLOSE)
         if not (isinstance(c, dict) and c.get("x") is not None):
             break
@@ -1015,6 +1114,11 @@ def search_and_select(cxt, tab, name, stats=None, expect="", post_url="", dry=Tr
         stats.update(sinfo)
         stats["hit"] = bool(sel)
     if not sel:
+        dbg = cxtlib.cdp(cxt, tab, js_picker_debug())
+        if stats is not None:
+            stats["picker"] = dbg
+        log("   picker sin fila para %r: %s"
+            % (name, json.dumps(dbg, ensure_ascii=False)[:700]))
         return False
     settle(cxt, tab)
     time.sleep(0.4)
@@ -1033,7 +1137,7 @@ def search_and_select(cxt, tab, name, stats=None, expect="", post_url="", dry=Tr
     if isinstance(act, dict) and act.get("x") is not None and not act.get("disabled"):
         js_click(cxt, tab, act["x"], act["y"])           # "Compartir ahora"
         settle(cxt, tab)
-        s, info = _wait_submit(cxt, tab, timeout=4.0, step="search_share")
+        s, info = _wait_submit(cxt, tab, timeout=20.0, step="search_share")
         if not (s and s.get("x") is not None and not s.get("reason")):
             # Reintento SOLO si "Compartir ahora" sigue en el MISMO sitio: tras
             # el primer click el picker puede haberse cerrado y ese punto ya es
@@ -1045,9 +1149,15 @@ def search_and_select(cxt, tab, name, stats=None, expect="", post_url="", dry=Tr
                     and abs(act2["y"] - act["y"]) <= 2):
                 js_click(cxt, tab, act2["x"], act2["y"])
                 settle(cxt, tab)
-                s, info = _wait_submit(cxt, tab, timeout=4.0, step="search_share")
+                s, info = _wait_submit(cxt, tab, timeout=20.0, step="search_share")
     else:
-        s, info = _wait_submit(cxt, tab, timeout=4.0, step="search_submit")
+        s, info = _wait_submit(cxt, tab, timeout=20.0, step="search_submit")
+    if not (s and s.get("x") is not None and not s.get("reason")):
+        if isinstance(s, dict) and s.get("reason") in ("cubierto", "invisible"):
+            s = _isolate_submit(cxt, tab, stats=stats)
+            info = {"tries": (info or {}).get("tries", 0),
+                    "hit": bool(s and s.get("x") is not None and not s.get("reason")),
+                    "timed_out": not bool(s and s.get("x") is not None and not s.get("reason"))}
     if stats is not None:
         stats.update(info)
     if not (s and s.get("x") is not None and not s.get("reason")):
@@ -1060,6 +1170,7 @@ def search_and_select(cxt, tab, name, stats=None, expect="", post_url="", dry=Tr
         stats["share_ctx"] = ev
         stats["share_reason"] = why
     if not ok:
+        log("   contexto: %s" % json.dumps(ev, ensure_ascii=False))
         log("   ABORTO (%s): el compositor no contiene el post original" % why)
         return False
     return True
@@ -1368,15 +1479,19 @@ def _identity(cxt, tab, url, expect):
     if url:
         log("abro la publicacion: %s" % url)
         goto_post(cxt, tab, url)
-        ok = poll_js(cxt, tab, js_find_share(exp), timeout=5.0, tick=TICK)[0]
+        # El permalink puede tardar en montar el post y su action bar; 5 s
+        # producia falsos `identity` con Facebook lento (visto 25-oct).
+        ok = poll_js(cxt, tab, js_find_share(exp), timeout=40.0, tick=TICK)[0]
         if not share_point_ok(ok):
             if isinstance(ok, dict) and ok.get("reason"):
                 log("no puedo confirmar el post: %s" % ok["reason"])
             cur = cxtlib.cdp(cxt, tab, "location.href") or ""
             base = cur.split("#")[0].split("?")[0]
-            log("aun no veo el post; reintento por permalink: %s" % (base or url))
-            goto_post(cxt, tab, base or url)
-            ok = poll_js(cxt, tab, js_find_share(exp), timeout=5.0, tick=TICK)[0]
+            log("aun no veo el post; recargo permalink: %s" % (base or url))
+            # goto_post no navega si la URL ya coincide, y sin recarga el modal
+            # del permalink a veces no monta (el feed sigue de fondo).
+            cxtlib.call(cxt, "reload", {"tabId": tab}, timeout=40)
+            ok = poll_js(cxt, tab, js_find_share(exp), timeout=40.0, tick=TICK)[0]
         if not share_point_ok(ok):
             log("ERROR: no pude confirmar la publicacion (identity)")
             return exp, {"ok": False, "stage": "identity", "reason": "identity"}
@@ -1482,8 +1597,10 @@ def resolve_photo_viewer_url(cxt, tab, url):
     if not url or not is_photo_viewer_url(url):
         return url or ""
     goto_post(cxt, tab, url)
-    links = cxtlib.cdp(cxt, tab, JS_POST_LINKS) or []
-    canon = pick_canonical_post_url(url, links)
+    # El enlace "Ver publicacion" lo monta React despues del load: leerlo una
+    # sola vez daba falso photo-sin-permalink en posts que si lo tienen.
+    links, _ = poll_js(cxt, tab, JS_POST_LINKS, timeout=15.0, step="post-links")
+    canon = pick_canonical_post_url(url, links or [])
     if not canon:
         log("   ERROR: visor de foto sin permalink de post; no comparto a ciegas")
         return ""
@@ -1548,7 +1665,7 @@ def js_feed_probe(gid, fbid="", needle="", author="", group=""):
     """
     tpl = r"""(()=>{
 const gid=__GID__,fbid=__FBID__,needle=__NEEDLE__,author=__AUTHOR__,group=__GROUP__;
-const norm=(s)=>(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[\u200b-\u200f\u2060\ufeff\u00ad]/g,'').replace(/\s+/g,' ').trim().toLowerCase();
+const norm=(s)=>(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[\u200b-\u200f\u2060\ufeff\u00ad]/g,'').replace(/\\s+/g,' ').trim().toLowerCase();
 const countOcc=(hay,n)=>{if(!n)return 0;let i=-1,c=0;while((i=hay.indexOf(n,i+1))>=0)c++;return c;};
 const body=(document.body&&document.body.innerText)||'';
 const html=(document.documentElement&&document.documentElement.innerHTML)||'';
@@ -1618,7 +1735,7 @@ JS_POST_CANDIDATES = r"""(()=>{
 const gid=__GID__;
 const h=(document.documentElement&&document.documentElement.innerHTML)||'';
 const unesc=(s)=>{try{return JSON.parse('"'+s+'"');}catch(e){return s;}};
-const clean=(s)=>(s||'').replace(/\s+/g,' ').trim();
+const clean=(s)=>(s||'').replace(/\\s+/g,' ').trim();
 // Epoch en milisegundos. Acepta numeros (segundos o ms) e ISO 8601.
 const toEpochMs=(v)=>{
   if(v===null||v===undefined)return 0;
@@ -2256,7 +2373,8 @@ def _share_one(cxt, tab, group, dry, text, expect, verify=None, post_url=""):
         picked = search_and_select(cxt, tab, group, stats=st3, expect=needle,
                                    post_url=post_url, dry=dry)
         trace(group, "search_select", now_ms() - t0, picked,
-              "" if picked else "row", st3)
+              "" if picked else "row", st3,
+              None if picked else {"picker": st3.get("picker")})
         if not picked:
             log("  no encontre/comparti el grupo; cierro solo el selector")
             close_share_dialog(cxt, tab)
@@ -2529,8 +2647,7 @@ def post_in_group(cxt, tab, g, text, dry=False):
         return {"name": g["name"], "ok": False, "skipped": True, "stage": "venta"}
     pub = None
     for _try in range(3):
-        cxtlib.call(cxt, "cdpclick", {"x": int(comp["x"] + comp["w"] / 2),
-                                      "y": int(comp["y"] + comp["h"] / 2), "tabId": tab}, 180)
+        cxtlib.click(cxt, tab, comp["x"] + comp["w"] / 2, comp["y"] + comp["h"] / 2)
         pub = bring_exact(cxt, tab, PUBLISH_TEXT, 200, 30, 95, timeout=3.0)
         if not pub:
             pub = bring_exact(cxt, tab, PUBLISH_TEXT, 120, 25, 120, timeout=2.0)
@@ -2552,8 +2669,7 @@ def post_in_group(cxt, tab, g, text, dry=False):
                 "pub": [pub["x"], pub["y"], pub["w"], pub["h"]]}
     for _attempt in range(2):
         pub = bring_exact(cxt, tab, PUBLISH_TEXT, 200, 30, 95, timeout=3.0) or pub
-        cxtlib.call(cxt, "cdpclick", {"x": pub["x"] + pub["w"] // 2,
-                                      "y": pub["y"] + pub["h"] // 2, "tabId": tab}, 180)
+        cxtlib.click(cxt, tab, pub["x"] + pub["w"] // 2, pub["y"] + pub["h"] // 2)
         t0 = time.time()   # exito = el boton Publicar desaparece (dialogo cerrado)
         while time.time() - t0 < 6.0:
             if not find_exact(cxt, tab, PUBLISH_TEXT, 200, 30, 95):

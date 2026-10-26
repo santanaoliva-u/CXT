@@ -160,7 +160,11 @@
           <button id="approveBtn" class="btn btn-primary" type="button" disabled>Aprobar borrador</button>
           <button id="verifyBtn" class="btn btn-quiet" type="button" hidden>Verificar cambios</button>
           <button id="copyBtn" class="btn btn-quiet" type="button" disabled>Copiar texto</button>
-          <button id="publishBtn" class="btn btn-publish" type="button" disabled>Publicar</button>
+          <button id="publishBtn" class="btn btn-publish is-gated" type="button" aria-disabled="true" aria-describedby="publishGateText">Publicar</button>
+        </div>
+        <div id="publishGate" class="publish-gate is-blocked" tabindex="-1">
+          <span class="publish-gate-label" aria-hidden="true">Publicación</span>
+          <p id="publishGateText" class="publish-gate-text" role="status" aria-live="polite">Investiga y redacta para habilitar «Publicar».</p>
         </div>
         <div id="draftStatus" class="inline-status" role="status" aria-live="polite"></div>
       </section>

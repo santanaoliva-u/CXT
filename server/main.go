@@ -998,6 +998,13 @@ func (s *server) handleCmd(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, resultMsg{ID: cm.ID, OK: false, Error: "extension CXT desactivada (kill switch activo): no se ejecuta nada"})
 		return
 	}
+	// Sin extension conectada no hay quien recoja el comando: antes se
+	// encolaba y cada op quemaba ~140 s hasta el timeout del CLI (deuda
+	// registrada al trabajar con Chrome cerrado). Fallar ya y decirlo.
+	if !s.extensionOnline() {
+		writeJSON(w, 503, resultMsg{ID: cm.ID, OK: false, Error: "extension no conectada (extension_online=false): abre Chrome con la extension CXT cargada"})
+		return
+	}
 	ch := make(chan resultMsg, 1)
 	s.mu.Lock()
 	s.wait[cm.ID] = ch

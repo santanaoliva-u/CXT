@@ -546,6 +546,43 @@
     });
   }
 
+  function publishBlockReason() {
+    const run = state.run;
+    const text = $("draftText").value.trim();
+    if (!run || !run.stamp) return "Primero investiga y redacta: Publicar se habilita cuando hay un borrador verificado.";
+    if (!text) return "El borrador está vacío: escribe o genera un texto antes de publicar.";
+    if (state.dirty) return "Hay ediciones sin verificar. Pulsa «Verificar cambios» y después «Aprobar borrador».";
+    if (!run.stamp.publishable) return "El sello editorial bloquea la publicación. Revisa los controles fallidos en Evidencia.";
+    if (!state.approved) return "Falta tu aprobación: pulsa «Aprobar borrador» y después «Publicar».";
+    return "";
+  }
+
+  function renderPublishGate() {
+    const box = $("publishGate");
+    const copy = $("publishGateText");
+    const reason = publishBlockReason();
+    const ready = !reason;
+    const message = ready
+      ? "Aprobado. Pulsa «Publicar» y confirma «Publicar ahora» en el diálogo."
+      : reason;
+    if (copy.textContent !== message) copy.textContent = message;
+    box.classList.toggle("is-ready", ready);
+    box.classList.toggle("is-blocked", !ready);
+    const button = $("publishBtn");
+    button.classList.toggle("is-gated", !ready);
+    button.setAttribute("aria-disabled", ready ? "false" : "true");
+  }
+
+  function showPublishBlocked(reason) {
+    renderPublishGate();
+    toast(reason);
+    const box = $("publishGate");
+    box.classList.remove("is-nudge");
+    void box.offsetWidth;
+    box.classList.add("is-nudge");
+    box.focus();
+  }
+
   function renderDraft(run) {
     const draft = run && run.draft;
     const text = (draft && draft.text) || "";
@@ -570,7 +607,7 @@
     $("verifyBtn").hidden = !state.dirty || !(run && run.run_id);
     $("approveBtn").disabled = !(run && run.stamp && run.stamp.publishable) || state.dirty || !text;
     $("copyBtn").disabled = !text;
-    $("publishBtn").disabled = !(state.approved && run && run.stamp && run.stamp.publishable && !state.dirty && text);
+    renderPublishGate();
   }
 
   function renderAudit(runs) {
@@ -771,11 +808,15 @@
     if (!state.run || !state.run.stamp || !state.run.stamp.publishable || state.dirty) return;
     state.approved = true;
     renderDraft(state.run);
-    toast("Borrador aprobado. Ya puedes publicar.", "ok");
+    toast("Borrador aprobado. Pulsa «Publicar» y confirma «Publicar ahora».", "ok");
   }
 
   function openPublish() {
-    if (!state.run || !state.run.stamp || !state.run.stamp.publishable || state.dirty || !state.approved) return;
+    const reason = publishBlockReason();
+    if (reason) {
+      showPublishBlocked(reason);
+      return;
+    }
     $("publishQuote").textContent = $("draftText").value.trim();
     $("publishDialog").showModal();
   }

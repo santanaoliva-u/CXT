@@ -177,8 +177,38 @@ def cdp(cxt, tab, expr, timeout=90, await_promise=True):
         return None
 
 
+_UI_OFF = ("(()=>{let s=document.getElementById('cxt-auto-suppress');"
+           "if(!s){s=document.createElement('style');s.id='cxt-auto-suppress';"
+           "s.textContent='[data-cxt-auto-ui]{pointer-events:none!important}';"
+           "document.documentElement.appendChild(s);}return true;})()")
+_UI_ON = ("(()=>{const s=document.getElementById('cxt-auto-suppress');"
+          "if(s)s.remove();return true;})()")
+
+
 def click(cxt, tab, x, y, timeout=120):
-    return call(cxt, "cdpclick", {"tabId": tab, "x": int(x), "y": int(y)}, timeout)
+    """Click CDP con `buttons` (el `cdpclick` viejo no lo mandaba y FB lo ignora).
+
+    Suprime la barra flotante de CXT solo durante el click: si el usuario la
+    arrastro sobre el compositor, sus clicks se perderian.
+    """
+    x, y = int(x), int(y)
+    call(cxt, "cdp", {"tabId": tab, "method": "Runtime.evaluate",
+                      "params": {"expression": _UI_OFF, "returnByValue": True}}, timeout)
+    try:
+        call(cxt, "cdp", {"tabId": tab, "method": "Input.dispatchMouseEvent",
+                          "params": {"type": "mouseMoved", "x": x, "y": y,
+                                     "button": "none", "buttons": 0}}, timeout)
+        call(cxt, "cdp", {"tabId": tab, "method": "Input.dispatchMouseEvent",
+                          "params": {"type": "mousePressed", "x": x, "y": y,
+                                     "button": "left", "buttons": 1, "clickCount": 1}}, timeout)
+        time.sleep(0.08)
+        call(cxt, "cdp", {"tabId": tab, "method": "Input.dispatchMouseEvent",
+                          "params": {"type": "mouseReleased", "x": x, "y": y,
+                                     "button": "left", "buttons": 1, "clickCount": 1}}, timeout)
+    finally:
+        call(cxt, "cdp", {"tabId": tab, "method": "Runtime.evaluate",
+                          "params": {"expression": _UI_ON, "returnByValue": True}}, timeout)
+    return {"clicked": True, "x": x, "y": y}
 
 
 def clear_draft(cxt, tab):

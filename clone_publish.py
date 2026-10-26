@@ -1,4 +1,4 @@
-import json, os, subprocess, sys, time
+import atexit, json, os, subprocess, sys, time
 
 import cxtlib
 
@@ -40,6 +40,21 @@ EDITOR_JS = r'''(()=>{let best=null,bd=1e9;for(const e of document.querySelector
 def cdp(expr):
     r = call("cdp", {"method": "Runtime.evaluate", "params": {"expression": expr, "returnByValue": True}, "tabId": TAB})
     return r.get("result", {}).get("result", {}).get("value")
+
+
+CXT_UI_OFF = r"""(()=>{let s=document.getElementById('cxt-auto-suppress');if(!s){s=document.createElement('style');s.id='cxt-auto-suppress';s.textContent='[data-cxt-auto-ui]{pointer-events:none!important}';document.documentElement.appendChild(s);}return true;})()"""
+CXT_UI_ON = r"""(()=>{const s=document.getElementById('cxt-auto-suppress');if(s)s.remove();return true;})()"""
+
+
+def cxt_ui(enabled):
+    """La barra flotante de CXT puede quedar encima del compositor; no debe interceptar."""
+    try:
+        cdp(CXT_UI_ON if enabled else CXT_UI_OFF)
+    except Exception:
+        pass
+
+
+atexit.register(lambda: cxt_ui(True))
 
 
 def cur_url():
@@ -94,7 +109,39 @@ def find_composer(tries=25):
 
 
 def click(x, y):
-    return call("cdpclick", {"x": x, "y": y, "tabId": TAB})
+    # Click CDP completo. `cdpclick` del extension no manda `buttons` y el
+    # compositor de Facebook lo ignora. Suprimimos la barra flotante de CXT
+    # justo antes de cada click: la pagina puede borrar el <style> al re-renderizar.
+    cxt_ui(False)
+    call("cdp", {"method": "Input.dispatchMouseEvent", "params": {
+        "type": "mouseMoved", "x": x, "y": y, "button": "none", "buttons": 0}, "tabId": TAB})
+    call("cdp", {"method": "Input.dispatchMouseEvent", "params": {
+        "type": "mousePressed", "x": x, "y": y, "button": "left", "buttons": 1, "clickCount": 1}, "tabId": TAB})
+    time.sleep(0.08)
+    call("cdp", {"method": "Input.dispatchMouseEvent", "params": {
+        "type": "mouseReleased", "x": x, "y": y, "button": "left", "buttons": 1, "clickCount": 1}, "tabId": TAB})
+    cxt_ui(True)
+    return {"clicked": True, "x": x, "y": y}
+
+
+def js_click_composer(c):
+    """Fallback: click sintetico sobre el boton real del compositor (ignora overlays)."""
+    x = int(c["x"] + max(20, min(80, int(c["w"]) // 4)))
+    y = int(c["y"] + c["h"] // 2)
+    expr = """(()=>{const x=%d,y=%d;const bs=[...document.querySelectorAll('[role=button]')];
+      for(const e of bs){const r=e.getBoundingClientRect();
+        if(x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom&&/pensando/i.test(e.innerText||'')){
+          e.click();return true;}}
+      const e=document.elementFromPoint(x,y);const b=e&&e.closest('[role=button]');
+      if(b){b.click();return true;}return false;})()""" % (x, y)
+    return cdp(expr)
+
+
+def js_click_text(text):
+    expr = """(()=>{const t=%s;for(const e of document.querySelectorAll('[role=button],button')){
+      const r=e.getBoundingClientRect();const s=(e.innerText||'').trim().toLowerCase();
+      if(r.width>30&&r.height>15&&s===t){e.click();return true;}}return false;})()""" % json.dumps(text.lower())
+    return cdp(expr)
 
 
 def wait_for(text, tries=30, interval=0.3, minw=60, lo=18, hi=90, exact=False):
@@ -116,21 +163,25 @@ log("=== PUBLICAR (clone) ===")
 # no robar el foco del usuario.
 clear_drafts()
 ensure_fresh()
+cxt_ui(False)
 call("cdpkey", {"key": "Escape", "tabId": TAB})
 time.sleep(0.3)
 
 c = find_composer()
 if not c:
     log("no encontre el compositor")
+    cxt_ui(True)
     print(json.dumps({"ok": False, "stage": "composer-not-found"}))
     sys.exit(1)
 log("compositor en %s,%s" % (c["x"], c["y"]))
-click(c["x"] + c["w"] // 2, c["y"] + c["h"] // 2)
+# El centro del texto del compositor no siempre recibe el click nativo; el
+# tercio izquierdo (zona del avatar) sí. Evitamos tambien la barra flotante.
+click(c["x"] + max(20, min(80, int(c["w"]) // 4)), c["y"] + c["h"] // 2)
 
 # El modal de Facebook tiene 2 variantes: directa (boton Publicar a la vista)
 # o de 2 pasos (boton Siguiente -> panel -> Publicar). Aceptamos las dos.
 opened = None
-for _ in range(25):
+for _i in range(25):
     time.sleep(0.4)
     if pick("publicar", 80, 20, 70, exact=True):
         opened = "publicar"
@@ -138,8 +189,12 @@ for _ in range(25):
     if pick("siguiente", 60, 20, 90, exact=True):
         opened = "siguiente"
         break
+    if _i == 4:
+        log("click nativo no abrio; fallback JS sobre el compositor")
+        js_click_composer(c)
 if not opened:
     log("el modal no abrio (ni Publicar ni Siguiente)")
+    cxt_ui(True)
     print(json.dumps({"ok": False, "stage": "modal"}))
     sys.exit(1)
 log("modal abierto (variante %s)" % opened)
@@ -174,20 +229,26 @@ for attempt in range(5):
         log("aun sin Publicar (intento %d)" % (attempt + 1))
 if not pub:
     log("no aparecio el boton Publicar")
+    cxt_ui(True)
     print(json.dumps({"ok": False, "stage": "publicar"}))
     sys.exit(1)
 log("boton Publicar en %s,%s" % (pub["x"], pub["y"]))
 if "--dry" in sys.argv:
+    cxt_ui(True)
     print(json.dumps({"ok": True, "dry": True, "pub": [pub["x"], pub["y"], pub["w"], pub["h"]], "ms": int((time.time() - t0) * 1000)}, ensure_ascii=False))
     sys.exit(0)
 click(pub["x"] + pub["w"] // 2, pub["y"] + 8)
 log("pulse Publicar")
 
 ok = False
-for _ in range(30):
+for _i in range(30):
     time.sleep(0.4)
     if not pick("publicar", 80, 20, 70, exact=True):
         ok = True
         break
+    if _i == 4:
+        log("click nativo no cerro el panel; fallback JS sobre Publicar")
+        js_click_text("Publicar")
 log("resultado: " + ("publicado" if ok else "no confirme el cierre del panel"))
+cxt_ui(True)
 print(json.dumps({"ok": ok, "ms": int((time.time() - t0) * 1000)}, ensure_ascii=False))

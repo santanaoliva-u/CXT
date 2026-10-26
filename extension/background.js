@@ -184,11 +184,30 @@ async function cdp(tabId, method, params) {
   }
 }
 
+const CXT_UI_OFF = "(()=>{let s=document.getElementById('cxt-auto-suppress');" +
+  "if(!s){s=document.createElement('style');s.id='cxt-auto-suppress';" +
+  "s.textContent='[data-cxt-auto-ui]{pointer-events:none!important}';" +
+  "document.documentElement.appendChild(s);}return true;})()";
+const CXT_UI_ON = "(()=>{const s=document.getElementById('cxt-auto-suppress');" +
+  "if(s)s.remove();return true;})()";
+
+async function setCxtUi(tabId, on) {
+  try {
+    await cdp(tabId, "Runtime.evaluate", { expression: on ? CXT_UI_ON : CXT_UI_OFF, returnByValue: true });
+  } catch (e) {}
+}
+
 async function clickAt(tabId, x, y) {
-  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" });
-  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-  await sleep(60);
-  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+  // La barra flotante de CXT puede quedar encima del compositor/botones.
+  await setCxtUi(tabId, false);
+  try {
+    await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", buttons: 0 });
+    await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+    await sleep(60);
+    await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 1, clickCount: 1 });
+  } finally {
+    await setCxtUi(tabId, true);
+  }
 }
 
 async function loop() {
@@ -760,6 +779,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         return;
       }
       if (node.nodeType !== 1) return;
+      const tag = String(node.tagName || "").toLowerCase();
+      if (tag === "script" || tag === "style" || tag === "noscript" || tag === "template") return;
       try {
         if (node.shadowRoot) walk(node.shadowRoot);
       } catch (e) {}
@@ -1445,7 +1466,13 @@ chrome.runtime.onMessage.addListener((msg, _s, send) => {
   }
   if (msg.type === "runOp") {
     const reply = send;
-    if (_s && _s.tab) {
+    // El popup abierto como pestaña (chrome-extension://<id>/popup.html) llega
+    // con sender.tab y antes se rechazaba: depurarlo asi era imposible (F3).
+    // Solo se abre la puerta a esa pagina de la propia extension; los content
+    // scripts de webs siguen bloqueados igual que antes.
+    const ownPopup = !!(_s && _s.tab && typeof _s.url === "string" &&
+      _s.url.indexOf(chrome.runtime.getURL("popup.html")) === 0);
+    if (_s && _s.tab && !ownPopup) {
       reply({ ok: false, error: "runOp: origen no permitido" });
       return true;
     }

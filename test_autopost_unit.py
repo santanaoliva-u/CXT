@@ -35,6 +35,10 @@ os.environ["CXT_DIR"] = _TMP
 import autopost as AP  # noqa: E402
 import ledger as L  # noqa: E402
 
+# `_record_last_run` consulta la pestana propia (daemon/extension). Un test
+# unitario no debe depender de que Chrome este abierto: se fija a None.
+AP._dedicated_tab = lambda: None
+
 # Aislamos TODAS las rutas que toca el worker para no leer/escribir en ~/.cxt.
 AP.QUEUE = os.path.join(_TMP, "autoqueue.json")
 AP.ATTEMPTS = os.path.join(_TMP, "autopost_attempts.json")

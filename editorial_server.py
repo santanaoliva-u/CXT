@@ -4,7 +4,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import tempfile
+import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -14,6 +17,15 @@ import editorial
 HOST = "127.0.0.1"
 PORT = 8795
 MAX_BODY = 2 * 1024 * 1024
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _log(action: str, **fields: object) -> None:
+    detail = " ".join(f"{key}={fields[key]}" for key in sorted(fields))
+    print(f"[editorial] action={action} {detail}".rstrip(), file=sys.stderr, flush=True)
 
 
 def _state_dir() -> Path:
@@ -190,39 +202,87 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/draft":
                 run_id = str(body.get("run_id") or "").strip()
                 if not run_id:
+                    _log("draft", run_id="", status=400, code="missing_run")
                     self._error(400, "falta run_id", "missing_run")
                     return
                 result = editorial.draft_for_run(run_id, angle_id=body.get("angle_id"))
+                _log("draft", run_id=run_id, status=200, ok=bool(result.get("ok")))
                 self._send(200, result)
                 return
             if parsed.path == "/api/verify":
                 run_id = str(body.get("run_id") or "").strip()
                 text = str(body.get("text") or "").strip()
                 if not run_id or not text:
+                    _log("verify", run_id=run_id, status=400, code="missing_data")
                     self._error(400, "faltan run_id o text", "missing_data")
                     return
                 stamp = editorial.verify_draft(run_id, text, angle_id=body.get("angle_id"))
+                _log("verify", run_id=run_id, status=200, color=stamp.get("color", ""))
                 self._send(200, {"ok": True, "stamp": stamp})
+                return
+            if parsed.path == "/api/approve":
+                run_id = str(body.get("run_id") or "").strip()
+                text = str(body.get("text") or "").strip()
+                if not run_id:
+                    _log("approve", run_id="", status=400, code="missing_run")
+                    self._error(400, "falta run_id", "missing_run")
+                    return
+                run = editorial.get_run(run_id)
+                if not run:
+                    _log("approve", run_id=run_id, status=404, code="not_found")
+                    self._error(404, "run no encontrado", "not_found")
+                    return
+                stamp = run.get("stamp") or {}
+                draft_text = (run.get("draft") or {}).get("text") or ""
+                if stamp.get("color") != "green" or not stamp.get("publishable"):
+                    _log("approve", run_id=run_id, status=409, code="stamp_blocked", color=stamp.get("color", ""))
+                    self._error(409, "el sello no autoriza la aprobación", "stamp_blocked")
+                    return
+                if text and text != draft_text.strip():
+                    _log("approve", run_id=run_id, status=409, code="text_mismatch")
+                    self._error(409, "el texto no coincide con el borrador verificado", "text_mismatch")
+                    return
+                approved_at = _now_iso()
+                conn = editorial._connect(editorial.DEFAULT_DB)
+                try:
+                    with conn:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO approvals VALUES (?,?,?,?)",
+                            (run_id, approved_at, "api", "aprobado desde la mesa editorial"),
+                        )
+                finally:
+                    conn.close()
+                _log("approve", run_id=run_id, status=200, color="green")
+                self._send(200, {"ok": True, "approved": True, "run_id": run_id, "approved_at": approved_at})
                 return
             if parsed.path == "/api/publish":
                 run_id = str(body.get("run_id") or "").strip()
                 text = str(body.get("text") or "").strip()
+                if not run_id:
+                    _log("publish", run_id="", status=400, code="missing_run")
+                    self._error(400, "falta run_id", "missing_run")
+                    return
                 if body.get("approve") is not True:
+                    _log("publish", run_id=run_id, status=403, code="approval_required")
                     self._error(403, "falta aprobación explícita", "approval_required")
                     return
                 if os.environ.get("CXT_EDITORIAL_ALLOW_PUBLISH") != "1":
+                    _log("publish", run_id=run_id, status=403, code="publish_disabled")
                     self._error(403, "publicación deshabilitada; activa CXT_EDITORIAL_ALLOW_PUBLISH=1", "publish_disabled")
                     return
                 run = editorial.get_run(run_id)
                 if not run:
+                    _log("publish", run_id=run_id, status=404, code="not_found")
                     self._error(404, "run no encontrado", "not_found")
                     return
                 stamp = run.get("stamp") or {}
                 draft = run.get("draft") or {}
                 if stamp.get("color") != "green" or not stamp.get("publishable"):
+                    _log("publish", run_id=run_id, status=409, code="stamp_blocked", color=stamp.get("color", ""))
                     self._error(409, "el sello no autoriza la publicación", "stamp_blocked")
                     return
                 if not text or text != (draft.get("text") or "").strip():
+                    _log("publish", run_id=run_id, status=409, code="text_mismatch")
                     self._error(409, "el texto no coincide con el borrador aprobado", "text_mismatch")
                     return
                 try:
@@ -238,25 +298,40 @@ class Handler(BaseHTTPRequestHandler):
                         },
                     })
                 except FileExistsError:
+                    _log("publish", run_id=run_id, status=409, code="cmd_pending")
                     self._error(409, "hay un comando de programación pendiente", "cmd_pending")
                     return
+                except OSError as exc:
+                    _log("publish", run_id=run_id, status=503, code="cmd_write_failed", error=type(exc).__name__)
+                    self._error(503, f"no se pudo escribir el comando: {type(exc).__name__}", "cmd_write_failed")
+                    return
+                queued_at = _now_iso()
                 conn = editorial._connect(editorial.DEFAULT_DB)
                 try:
                     with conn:
                         conn.execute(
+                            "INSERT OR REPLACE INTO approvals VALUES (?,?,?,?)",
+                            (run_id, queued_at, "api", "aprobado al publicar"),
+                        )
+                        conn.execute(
                             "INSERT OR REPLACE INTO publications VALUES (?,?,?,?)",
-                            (run_id, editorial.new_run_id(), "queued", "aprobado desde la mesa editorial"),
+                            (run_id, queued_at, "queued", "aprobado desde la mesa editorial"),
                         )
                 finally:
                     conn.close()
-                self._send(200, {"ok": True, "published": False, "queued": True, "message": "Aprobado y encolado para publicar."})
+                _log("publish", run_id=run_id, status=200, code="queued")
+                self._send(200, {"ok": True, "published": False, "queued": True, "run_id": run_id, "message": "Aprobado y encolado para publicar."})
                 return
             self._error(404, "ruta no encontrada", "not_found")
         except ValueError as exc:
+            _log("invalid", path=parsed.path, status=400, error=str(exc))
             self._error(400, str(exc), "invalid")
         except KeyError as exc:
+            _log("not_found", path=parsed.path, status=404, error=str(exc))
             self._error(404, str(exc), "not_found")
         except Exception as exc:
+            traceback.print_exc()
+            _log("internal", path=parsed.path, status=500, error=type(exc).__name__)
             self._error(500, f"fallo interno: {type(exc).__name__}", "internal")
 
 
