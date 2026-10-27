@@ -408,8 +408,9 @@ try:
     with open(GROUPS, encoding="utf-8") as fh:
         expected = json.load(fh).get("groups", [])
     sg = L.groups_map(SEED)
-    check("seed_groups: siembra 54", seeded == 54 == len(expected), (seeded, len(expected)))
-    check("seed_groups: 54 filas en grp", len(sg) == 54, len(sg))
+    check("seed_groups: siembra todos los grupos del catalogo",
+          seeded == len(expected), (seeded, len(expected)))
+    check("seed_groups: una fila grp por grupo", len(sg) == len(expected), len(sg))
     check("seed_groups: status ok", all(v["status"] == "ok" for v in sg.values()),
           {v["status"] for v in sg.values()})
     check("seed_groups: warm_at = first_seen - 72h",
@@ -424,7 +425,8 @@ try:
     L.group_state(str(first["id"]), name="NO PISAR", status="blocked", db=SEED2)
     seeded2 = L.seed_groups(GROUPS, SEED2)
     sg2 = L.groups_map(SEED2)
-    check("seed_groups: no pisa fila existente", seeded2 == 53, seeded2)
+    check("seed_groups: no pisa fila existente",
+          seeded2 == len(expected) - 1, seeded2)
     check("seed_groups: conserva nombre/estado aprendidos",
           sg2[str(first["id"])]["name"] == "NO PISAR"
           and sg2[str(first["id"])]["status"] == "blocked"
@@ -456,6 +458,42 @@ try:
           [s["kind"] for s in L.signals(10, MIG)] == ["migrado"], L.signals(10, MIG))
     check("migrate_attempts: archivo inexistente -> 0",
           L.migrate_attempts(os.path.join(_TMP, "nope.json"), MIG) == 0)
+
+    # 15. release de parejas unknown (fallo sin click) ---------------------
+    # Un `unknown` es terminal para el selector, asi que los grupos donde la
+    # ronda fallo ANTES de pulsar Publicar quedaban fuera para siempre. `release`
+    # los marca `absent` (no terminal) y no toca `last_ts` para no alargar el
+    # enfriamiento por publicacion.
+    REL = os.path.join(_TMP, "release.db")
+    L.init(REL)
+    L.result("g1", "pk", "unknown", False, db=REL)
+    L.result("g2", "pk", "ok", True, "https://x/p/1", db=REL)
+    before = L.post_group_map(REL)
+    n_before = before[("g1", "pk")]["n"]
+    ts_before = before[("g1", "pk")]["last_ts"]
+    check("release: libera una pareja unknown", L.release("g1", "pk", "ronda sin click", db=REL) == 1)
+    after = L.post_group_map(REL)
+    check("release: deja status absent y ok=0",
+          after[("g1", "pk")]["status"] == "absent" and after[("g1", "pk")]["ok"] == 0,
+          after[("g1", "pk")])
+    check("release: anota el motivo en proof",
+          after[("g1", "pk")]["proof"].startswith("release:ronda sin click"),
+          after[("g1", "pk")]["proof"])
+    check("release: no cuenta un intento nuevo", after[("g1", "pk")]["n"] == n_before)
+    check("release: no mueve last_ts (no alarga el enfriamiento)",
+          after[("g1", "pk")]["last_ts"] == ts_before)
+    check("release: ya no aparece en unresolved", L.unresolved(10, db=REL) == [])
+    check("release: repetir no cambia nada", L.release("g1", "pk", db=REL) == 0)
+    check("release: nunca pisa un ok",
+          L.release("g2", "pk", db=REL) == 0
+          and L.post_group_map(REL)[("g2", "pk")]["status"] == "ok")
+    check("release: gid/post_key inexistente -> 0", L.release("nope", "nope", db=REL) == 0)
+    try:
+        import autopost as A
+        check("release: absent no es terminal para el selector",
+              "absent" not in A.PAIR_TERMINAL, A.PAIR_TERMINAL)
+    except Exception as exc:  # noqa: BLE001 - el check debe fallar, no romper
+        check("release: absent no es terminal para el selector", False, exc)
 
     # 14. aislamiento del ledger real -------------------------------------
     check("no se creo ~/.cxt/ledger.db",

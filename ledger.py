@@ -521,6 +521,33 @@ def upgrade(gid, post_key, proof, ts=None, db=None) -> int:
     return _write(db, op)
 
 
+def release(gid, post_key, reason="", db=None) -> int:
+    """Libera una pareja `unknown` que la evidencia demuestra NO publicada.
+
+    Un `unknown` es `PAIR_TERMINAL` para el selector: la pareja no se reintenta
+    nunca. Eso es correcto cuando puede haber una publicacion real sin
+    acreditar, pero deja fuera para siempre los grupos donde la ronda fallo
+    ANTES de pulsar Publicar (medido: ronda 0/10 con motivo menu/picker/row/
+    cleanup, 0 clicks). Con `absent` la pareja vuelve a ser elegible (con el
+    enfriamiento normal de `cooldown_post`) y deja de contar como cubierta.
+
+    NO se llama sola: exige evidencia externa (ronda sin click o auditoria), y
+    no toca `last_ts` a proposito para no alargar el enfriamiento. El WHERE
+    exige `unknown`: un ok/blocked/removed/pending nunca se pisa.
+    Devuelve las filas cambiadas (0 = no habia nada que liberar).
+    """
+    note = ("release:%s" % reason).strip()[:120] if reason else "release"
+
+    def op(conn):
+        cur = conn.execute(
+            "UPDATE post_group SET status='absent', ok=0, proof=?"
+            " WHERE gid=? AND post_key=? AND status='unknown'",
+            (note, gid, post_key))
+        return cur.rowcount
+
+    return _write(db, op)
+
+
 def post_group_map(db=None) -> dict:
     """Mapa (gid, post_key) -> ultimo resultado; lo usa el selector para el
     enfriamiento por publicacion."""
