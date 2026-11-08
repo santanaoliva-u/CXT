@@ -1107,12 +1107,14 @@ def count_pending(items):
     # grupos elegibles). Excluirlo pondria pending=0 y el popup creeria que la
     # cola termino.
     return len([it for it in items
-                if (it.get("state") or "pendiente") in ("pendiente", "diferido")])
+                if it.get("repeat")
+                or (it.get("state") or "pendiente") in ("pendiente", "diferido")])
 
 
 def pick_pending(items, now_ms):
     for it in items:
-        if (it.get("state") or "pendiente") != "pendiente":
+        # `repeat` es un bucle por diseno: su estado guardado no lo retira.
+        if not it.get("repeat") and (it.get("state") or "pendiente") != "pendiente":
             continue
         if is_expired(it, now_ms):
             it["state"] = "error"
@@ -2158,7 +2160,8 @@ def _label(item):
     return (item.get("url") or item.get("expect") or item.get("text") or "")[:80]
 
 
-_ITEM_FIELDS = ("url", "expect", "filter", "limit", "text", "dry", "fast", "composer")
+_ITEM_FIELDS = ("url", "expect", "filter", "limit", "text", "dry", "fast",
+                "composer", "repeat")
 
 
 def public_items(items):
@@ -2530,13 +2533,21 @@ def _publish(st, q, items, item, now, gids=None, post_key=""):
             item.pop("_batch", None)
             ledger.unlock_browser(lock_fh)
 
-    item["state"] = "hecho" if res.get("ok") else "error"
-    item["error"] = res.get("error") or ""
-    if unres > 0 and item["state"] == "error":
-        item["error"] = "%d sin prueba (no se reintenta)" % unres
-    item["done_ms"] = int(time.time() * 1000)
-    attempt_mark(key, item["state"], item["error"], published=published,
-                 pending=pend, unresolved=unres)
+    if item.get("repeat"):
+        # `repeat` mantiene el item vivo: vuelve a "pendiente" y la siguiente
+        # ronda se programa a `interval_min` (p.ej. 7 min). Sin attempt_mark:
+        # el guard anti-duplicado lo daria por terminal y no volveria a correr.
+        item["state"] = "pendiente"
+        item["error"] = ""
+        item["done_ms"] = int(time.time() * 1000)
+    else:
+        item["state"] = "hecho" if res.get("ok") else "error"
+        item["error"] = res.get("error") or ""
+        if unres > 0 and item["state"] == "error":
+            item["error"] = "%d sin prueba (no se reintenta)" % unres
+        item["done_ms"] = int(time.time() * 1000)
+        attempt_mark(key, item["state"], item["error"], published=published,
+                     pending=pend, unresolved=unres)
     if not dry and any(r.get("status") in ("blocked", "removed")
                        for r in (applied.get("results") or [])):
         note_alert(st, "bloqueo/eliminacion en %d grupo(s)"
