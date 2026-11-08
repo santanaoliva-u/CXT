@@ -8,6 +8,7 @@ HTTP se ata a 127.0.0.1:0 (nunca 8798).
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
@@ -17,6 +18,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -431,7 +433,7 @@ class ManagerHTTPCase(TempHomeCase):
             status3, _body3, _headers = self.request("GET", "/health", headers={"Authorization": "Bearer s3cr3t"})
             self.assertEqual(status3, 200)
             status3b, _body3b, _headers = self.request("GET", "/health?token=s3cr3t")
-            self.assertEqual(status3b, 200)
+            self.assertEqual(status3b, 401)
             status4, _body4, _headers = self.request("GET", "/health", headers={"X-CXT-Token": "malo"})
             self.assertEqual(status4, 401)
         finally:
@@ -670,6 +672,70 @@ class ManagerHTTPCase(TempHomeCase):
         status, body, _headers = self.request("GET", "/nope")
         self.assertEqual(status, 404)
         self.assertEqual(body["code"], "not_found")
+
+
+# ---------------------------------------------------------------------------
+# Token del gestor: ausencia = auth off, ilegible/vacio = arranque cerrado
+# ---------------------------------------------------------------------------
+
+
+class TokenReadTest(TempHomeCase):
+    def setUp(self):
+        super().setUp()
+        write_local_state(self.chrome)
+        self.fake = FakeDaemon()
+
+    def _write_token(self, value):
+        self.home.mkdir(parents=True, exist_ok=True)
+        path = self.home / "profile_manager.token"
+        path.write_text(value, encoding="utf-8")
+        os.chmod(path, 0o600)
+        return path
+
+    def _write_unreadable_token(self):
+        path = self._write_token("secreto-que-no-debe-filtrarse")
+        os.chmod(path, 0)
+        self.addCleanup(os.chmod, path, 0o600)
+        if os.geteuid() == 0:
+            self.skipTest("root puede leer un archivo 000; el caso no es reproducible")
+        return path
+
+    def test_token_ausente_desactiva_auth(self):
+        self.assertEqual(PM._read_token(self.home / "profile_manager.token", strict=True), "")
+        manager = make_manager(self.home, self.chrome, self.fake)
+        self.assertEqual(manager.token, "")
+        self.assertFalse(bool(manager.token))
+
+    def test_token_valido_se_lee_en_modo_estricto(self):
+        path = self._write_token("token-valido")
+        self.assertEqual(PM._read_token(path, strict=True), "token-valido")
+
+    def test_token_ilegible_falla_cerrado_en_modo_estricto(self):
+        path = self._write_unreadable_token()
+        with self.assertRaises(PM.TokenReadError):
+            PM._read_token(path, strict=True)
+        self.assertEqual(PM._read_token(path), "")
+
+    def test_manager_no_arranca_si_token_ilegible(self):
+        self._write_unreadable_token()
+        with self.assertRaises(PM.TokenReadError):
+            make_manager(self.home, self.chrome, self.fake)
+
+    def test_token_vacio_falla_cerrado_en_modo_estricto(self):
+        path = self._write_token("")
+        with self.assertRaises(PM.TokenReadError):
+            PM._read_token(path, strict=True)
+        self.assertEqual(PM._read_token(path), "")
+
+    def test_main_devuelve_error_si_token_ilegible(self):
+        self._write_unreadable_token()
+        with mock.patch.dict(os.environ, {"CXT_PM_HOME": str(self.home)}):
+            stderr = io.StringIO()
+            with mock.patch("sys.stderr", stderr):
+                rc = PM.main(["--check"])
+        self.assertEqual(rc, 1)
+        self.assertIn("error:", stderr.getvalue())
+        self.assertNotIn("secreto-que-no-debe-filtrarse", stderr.getvalue())
 
 
 # ---------------------------------------------------------------------------

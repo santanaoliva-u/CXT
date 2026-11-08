@@ -50,8 +50,10 @@ def cxt_ui(enabled):
     """La barra flotante de CXT puede quedar encima del compositor; no debe interceptar."""
     try:
         cdp(CXT_UI_ON if enabled else CXT_UI_OFF)
-    except Exception:
-        pass
+        return True
+    except Exception as exc:
+        log("cxt_ui error: %s" % exc)
+        return False
 
 
 atexit.register(lambda: cxt_ui(True))
@@ -75,8 +77,10 @@ def clear_drafts():
             "if(r.width<10||r.height<8)continue;try{e.focus();document.execCommand('selectAll');"
             "document.execCommand('delete');}catch(x){}e.innerHTML='';n++;}return n;})()"
         )
-    except Exception:
-        pass
+        return True
+    except Exception as exc:
+        log("clear_drafts error: %s" % exc)
+        return False
 
 
 def ensure_fresh():
@@ -161,7 +165,10 @@ t0 = time.time()
 log("=== PUBLICAR (clone) ===")
 # Sin activacion: se publica en la pestana resuelta (propia/segundo plano) para
 # no robar el foco del usuario.
-clear_drafts()
+if not clear_drafts():
+    cxt_ui(True)
+    print(json.dumps({"ok": False, "stage": "clear-drafts-failed", "error": "no se pudieron limpiar drafts"}))
+    sys.exit(1)
 ensure_fresh()
 cxt_ui(False)
 call("cdpkey", {"key": "Escape", "tabId": TAB})

@@ -1216,14 +1216,17 @@ def _token():
 
 
 def health():
+
     url = "http://127.0.0.1:%s/health" % PORT
     tok = _token()
+    req = urllib.request.Request(url)
     if tok:
-        url += "?token=" + tok
+        req.add_header("X-CXT-Token", tok)
     try:
-        with urllib.request.urlopen(url, timeout=5) as r:
-            return json.loads(r.read().decode("utf-8"))
-    except Exception:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as e:
+        log("health err %s" % e)
         return None
 
 
@@ -1357,7 +1360,8 @@ def profile_pin(st=None, env=None):
 def _tab_list():
     try:
         r = cxtlib.call(CXT, "tabs", {})
-    except Exception:
+    except Exception as e:
+        log("tab_list err %s" % e)
         r = None
     tabs = r if isinstance(r, list) else (r or {}).get("tabs") or []
     return tabs if isinstance(tabs, list) else []
@@ -1402,7 +1406,8 @@ def warning_dialog(tab):
         return False
     try:
         return bool(cxtlib.cdp(CXT, tab, JS_WARN))
-    except Exception:
+    except Exception as e:
+        log("warning_dialog err %s" % e)
         return False
 
 
@@ -1419,7 +1424,8 @@ def block_notice(tab):
         return False
     try:
         return bool(cxtlib.cdp(CXT, tab, JS_BLOCK))
-    except Exception:
+    except Exception as e:
+        log("block_notice err %s" % e)
         return False
 
 
@@ -2114,8 +2120,22 @@ def _pid_alive():
 
 
 def _write_pid():
-    with open(PID, "w", encoding="utf-8") as f:
-        f.write(str(os.getpid()))
+
+    import tempfile
+
+    fd, tmp = tempfile.mkstemp(prefix=".autopost.pid.", suffix=".tmp", dir=DIR)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, PID)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def _remove_pid():

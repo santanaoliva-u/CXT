@@ -97,6 +97,10 @@ class UpstreamError(ProfileManagerError):
         self.extra = extra
 
 
+class TokenReadError(ProfileManagerError):
+    """El token existe pero no se puede leer: el arranque falla cerrado."""
+
+
 class _HTTPError(Exception):
     """Error que se traduce directo a una respuesta HTTP."""
 
@@ -554,22 +558,37 @@ def http_json(
         conn.close()
 
 
-def _read_token(path: Path) -> str:
-    """Lee un token (0600 esperado). Ausente -> cadena vacia."""
+def _read_token(path: Path, *, strict: bool = False) -> str:
+    """Lee un token (0600 esperado). Ausente -> cadena vacia.
+
+    Con ``strict=True`` un token presente pero ilegible o vacio lanza
+    ``TokenReadError``: es un error de configuracion, no una forma de
+    desactivar la autenticacion. La ausencia del archivo sigue siendo el
+    mecanismo explicito para desactivarla.
+    """
     try:
         stat = os.stat(path)
     except FileNotFoundError:
         return ""
     except OSError as exc:
+        if strict:
+            raise TokenReadError("no se pudo leer token %s: %s" % (path, exc)) from exc
         log.warning("no se pudo leer token %s: %s", path, exc)
         return ""
     if stat.st_mode & 0o077:
         log.warning("token %s con permisos amplios (esperado 0600)", path)
     try:
-        return path.read_text(encoding="utf-8").strip()
+        value = path.read_text(encoding="utf-8").strip()
     except OSError as exc:
+        if strict:
+            raise TokenReadError("no se pudo leer token %s: %s" % (path, exc)) from exc
         log.warning("no se pudo leer token %s: %s", path, exc)
         return ""
+    if strict and not value:
+        raise TokenReadError(
+            "token %s vacio; elimina el archivo para desactivar la autenticacion" % path
+        )
+    return value
 
 
 def resolve_cxtd() -> str:
@@ -647,7 +666,7 @@ class ProfileManager:
         self.start_timeout = float(start_timeout if start_timeout is not None else os.environ.get("CXT_P1_START_TIMEOUT", "20"))
         self.stop_timeout = float(stop_timeout if stop_timeout is not None else os.environ.get("CXT_P1_STOP_TIMEOUT", "10"))
         self.cxtd_bin = cxtd_bin if cxtd_bin is not None else resolve_cxtd()
-        self.token = _read_token(self.home / "profile_manager.token")
+        self.token = _read_token(self.home / "profile_manager.token", strict=True)
         self.started_at = time.time()
 
     # -- rutas -------------------------------------------------------------
@@ -1326,9 +1345,7 @@ class ManagerHandler(BaseHTTPRequestHandler):
         auth = (self.headers.get("Authorization") or "").strip()
         if not provided and auth.lower().startswith("bearer "):
             provided = auth[7:].strip()
-        if not provided:
-            query = parse_qs(urlparse(self.path).query)
-            provided = (query.get("token") or [""])[0].strip()
+        # Token only via header or Authorization: Bearer; never query strings.
         return bool(provided) and hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
 
     def _read_body(self) -> dict:
@@ -1507,7 +1524,11 @@ def main(argv: list[str] | None = None) -> int:
         print("error: el gestor solo puede escuchar en loopback (%s)" % ", ".join(sorted(LOOPBACK_HOSTS)), file=sys.stderr)
         return 2
 
-    manager = ProfileManager()
+    try:
+        manager = ProfileManager()
+    except TokenReadError as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return 1
     _configure_logging(manager.home, verbose=args.verbose)
 
     if args.check:

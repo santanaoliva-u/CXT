@@ -280,7 +280,7 @@ def _run_share_case(**flags):
     AP.active_tabs = lambda: seen.__setitem__("active", seen["active"] + 1) or [1]
     AP.restore_tabs = lambda ids: seen.__setitem__("restore", seen["restore"] + 1)
 
-    def _child(cmd, budget, env):
+    def _child(cmd, budget, env, log_path=None):
         seen["env"] = dict(env)
         _fake_child(cmd, budget, env)
 
@@ -321,7 +321,7 @@ check("run_share rollback (0): no fuerza modo fondo en el hijo",
 _ok_no_child = {"n": 0}
 
 
-def _child_should_not_run(cmd, budget, env):
+def _child_should_not_run(cmd, budget, env, log_path=None):
     _ok_no_child["n"] += 1
 
 

@@ -5,6 +5,8 @@ import json
 import os
 import re
 import sqlite3
+import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -123,59 +125,67 @@ def deepseek_draft(
         raise RuntimeError(f"DeepSeek no disponible: {type(exc).__name__}") from exc
 
 
+_SCHEMA_READY: set[str] = set()
+_SCHEMA_LOCK = threading.Lock()
+
+
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), timeout=10)
+    key = str(db_path)
+    conn = sqlite3.connect(key, timeout=10)
     conn.row_factory = sqlite3.Row
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS runs (
-            id TEXT PRIMARY KEY,
-            created_at TEXT NOT NULL,
-            instruction TEXT NOT NULL,
-            mode TEXT NOT NULL,
-            assignment_json TEXT NOT NULL,
-            dossier_json TEXT NOT NULL,
-            angles_json TEXT NOT NULL,
-            draft_text TEXT,
-            stamp_color TEXT,
-            stamp_json TEXT
-        );
-        CREATE TABLE IF NOT EXISTS sources (
-            run_id TEXT NOT NULL,
-            url TEXT,
-            outlet TEXT,
-            title TEXT,
-            published_at TEXT,
-            region TEXT,
-            confidence TEXT
-        );
-        CREATE TABLE IF NOT EXISTS claims (
-            run_id TEXT NOT NULL,
-            claim TEXT,
-            sources_json TEXT
-        );
-        CREATE TABLE IF NOT EXISTS drafts (
-            run_id TEXT NOT NULL,
-            text TEXT,
-            angle_id TEXT,
-            model TEXT,
-            created_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS approvals (
-            run_id TEXT PRIMARY KEY,
-            approved_at TEXT,
-            approved_by TEXT,
-            note TEXT
-        );
-        CREATE TABLE IF NOT EXISTS publications (
-            run_id TEXT PRIMARY KEY,
-            published_at TEXT,
-            status TEXT,
-            message TEXT
-        );
-        """
-    )
+    with _SCHEMA_LOCK:
+        if key not in _SCHEMA_READY:
+            conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS runs (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                instruction TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                assignment_json TEXT NOT NULL,
+                dossier_json TEXT NOT NULL,
+                angles_json TEXT NOT NULL,
+                draft_text TEXT,
+                stamp_color TEXT,
+                stamp_json TEXT
+            );
+            CREATE TABLE IF NOT EXISTS sources (
+                run_id TEXT NOT NULL,
+                url TEXT,
+                outlet TEXT,
+                title TEXT,
+                published_at TEXT,
+                region TEXT,
+                confidence TEXT
+            );
+            CREATE TABLE IF NOT EXISTS claims (
+                run_id TEXT NOT NULL,
+                claim TEXT,
+                sources_json TEXT
+            );
+            CREATE TABLE IF NOT EXISTS drafts (
+                run_id TEXT NOT NULL,
+                text TEXT,
+                angle_id TEXT,
+                model TEXT,
+                created_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS approvals (
+                run_id TEXT PRIMARY KEY,
+                approved_at TEXT,
+                approved_by TEXT,
+                note TEXT
+            );
+            CREATE TABLE IF NOT EXISTS publications (
+                run_id TEXT PRIMARY KEY,
+                published_at TEXT,
+                status TEXT,
+                message TEXT
+            );
+            """
+            )
+            _SCHEMA_READY.add(key)
     return conn
 
 
@@ -227,21 +237,41 @@ def _save_run(
         conn.close()
 
 
-def _previous_posts(db_path: Path, limit: int = 30, exclude_run_id: str = "") -> list[str]:
+def _previous_posts(
+    db_path: Path,
+    limit: int = 30,
+    exclude_run_id: str = "",
+    *,
+    retries: int = 3,
+    retry_delay: float = 0.2,
+) -> list[str]:
+    """Historial de borradores para la deduplicacion del sello.
+
+    Un fallo de la base NO puede devolver una lista vacia: eso haria que el
+    detector de duplicados no viera nada y el sello pudiera salir verde para un
+    post repetido. Se reintenta y, si persiste, se falla cerrado.
+    """
     if not db_path.exists():
         return []
-    try:
-        conn = _connect(db_path)
+    last: sqlite3.Error | None = None
+    for attempt in range(1, max(1, retries) + 1):
         try:
-            rows = conn.execute(
-                "SELECT draft_text FROM runs WHERE draft_text IS NOT NULL AND id != ? ORDER BY created_at DESC LIMIT ?",
-                (exclude_run_id, limit),
-            ).fetchall()
-            return [str(row[0]) for row in rows if row[0]]
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        return []
+            conn = _connect(db_path)
+            try:
+                rows = conn.execute(
+                    "SELECT draft_text FROM runs WHERE draft_text IS NOT NULL AND id != ? ORDER BY created_at DESC LIMIT ?",
+                    (exclude_run_id, limit),
+                ).fetchall()
+                return [str(row[0]) for row in rows if row[0]]
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            last = exc
+            if attempt < max(1, retries):
+                time.sleep(retry_delay)
+    raise RuntimeError(
+        "historial editorial ilegible (%s): %s" % (type(last).__name__, last)
+    ) from last
 
 
 def choose_angle(angles: list[Angle], requested: str | None = None) -> Angle:

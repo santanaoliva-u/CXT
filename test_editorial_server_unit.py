@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import threading
 import unittest
 import urllib.error
 import urllib.request
+from pathlib import Path
 from unittest import mock
 
 import editorial
@@ -117,6 +120,57 @@ class EditorialServerUnit(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             status = exc.code
         self.assertEqual(status, 400)
+
+
+class TokenTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name)
+        self._patch = mock.patch.object(editorial_server, "_state_dir", return_value=self.home)
+        self._patch.start()
+        self.token_path = self.home / "editorial.token"
+
+    def tearDown(self):
+        if self.token_path.exists():
+            os.chmod(self.token_path, 0o600)
+        self._patch.stop()
+        self._tmp.cleanup()
+
+    def write_token(self, content: str, mode: int = 0o600) -> None:
+        self.token_path.write_text(content, encoding="utf-8")
+        os.chmod(self.token_path, mode)
+
+    def test_ausente_desactiva_auth(self):
+        self.assertEqual(editorial_server._token(), "")
+        self.assertEqual(editorial_server._token(strict=True), "")
+        self.assertEqual(editorial_server.main(["--check"]), 0)
+
+    def test_token_valido(self):
+        self.write_token("abc\n")
+        self.assertEqual(editorial_server._token(strict=True), "abc")
+        self.assertEqual(editorial_server.main(["--check"]), 0)
+
+    def test_token_vacio_falla_cerrado(self):
+        self.write_token("  \n")
+        with self.assertRaises(editorial_server.TokenReadError):
+            editorial_server._token(strict=True)
+        with mock.patch("sys.stderr") as err:
+            self.assertEqual(editorial_server.main(["--check"]), 1)
+        printed = "".join(str(c) for c in err.write.call_args_list)
+        self.assertIn("error:", printed)
+        self.assertIn("vacio", printed)
+
+    @unittest.skipIf(os.geteuid() == 0, "root puede leer aunque no tenga permisos")
+    def test_token_ilegible_falla_cerrado(self):
+        self.write_token("secret-token\n", mode=0o000)
+        self.assertEqual(editorial_server._token(), "")
+        with self.assertRaises(editorial_server.TokenReadError):
+            editorial_server._token(strict=True)
+        with mock.patch("sys.stderr") as err:
+            self.assertEqual(editorial_server.main(["--check"]), 1)
+        printed = "".join(str(c) for c in err.write.call_args_list)
+        self.assertIn("error:", printed)
+        self.assertNotIn("secret-token", printed)
 
 
 if __name__ == "__main__":

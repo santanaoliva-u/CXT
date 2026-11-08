@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, random, re, subprocess, time
+import json, os, random, re, subprocess, tempfile, time
 import urllib.request
 
 import cxtlib
@@ -147,19 +147,36 @@ def log(msg):
     print(time.strftime("%Y-%m-%d %H:%M:%S"), msg, flush=True)
 
 
-def read_json(path, default):
+def read_json(path, default, *, strict=False):
+    """Lee estado. Ausente -> default. Ilegible -> cxtlib.JsonStateError (strict) o aviso+default."""
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except FileNotFoundError:
+        return default
+    except (OSError, ValueError) as exc:
+        msg = "estado JSON ilegible %s: %s" % (path, exc)
+        if strict:
+            raise cxtlib.JsonStateError(msg) from exc
+        log("read_json warn " + msg)
         return default
 
 
 def write_json(path, obj):
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        cxtlib._fsync_dir(path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def defaults():
@@ -388,33 +405,49 @@ def compose_text(cfg):
 
 
 def publish(text):
-    path = "/tmp/cxt_auto_post.txt"
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(text)
-    env = dict(os.environ)
-    tab = resolve_tab()
-    if not tab:
-        try:
-            tab = str(cxtlib.ensure_background_tab(CXT, "https://www.facebook.com/") or "")
-            log("publish_tab ensured " + tab)
-        except Exception as e:
-            log("ensure_background_tab err " + str(e))
-    if tab:
-        env["CXT_TAB"] = tab
-    env["CXT_POST_URL"] = os.environ.get("CXT_POST_URL") or "https://www.facebook.com/"
+    fd, path = tempfile.mkstemp(prefix="cxt_auto_post_", suffix=".txt", dir=DIR)
     try:
-        p = subprocess.run(["python3", "-u", PUB, path], capture_output=True, text=True, timeout=420, env=env)
-        for line in p.stdout.splitlines():
-            line = line.strip()
-            if line:
-                log("pub| " + line[:200])
-        for line in reversed(p.stdout.splitlines()):
-            line = line.strip()
-            if line.startswith("{"):
-                return json.loads(line)
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-    return {"ok": False, "error": "sin salida"}
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        env = dict(os.environ)
+        tab = resolve_tab()
+        if not tab:
+            try:
+                tab = str(cxtlib.ensure_background_tab(CXT, "https://www.facebook.com/") or "")
+                log("publish_tab ensured " + tab)
+            except Exception as e:
+                log("ensure_background_tab err " + str(e))
+        if tab:
+            env["CXT_TAB"] = tab
+        env["CXT_POST_URL"] = os.environ.get("CXT_POST_URL") or "https://www.facebook.com/"
+        try:
+            p = subprocess.run(["python3", "-u", PUB, path], capture_output=True, text=True, timeout=420, env=env)
+            for line in p.stdout.splitlines():
+                line = line.strip()
+                if line:
+                    log("pub| " + line[:200])
+            for line in reversed(p.stdout.splitlines()):
+                line = line.strip()
+                if line.startswith("{"):
+                    return json.loads(line)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "sin salida"}
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
 
 RETRYABLE_PUBLISH_STAGES = {"composer-not-found", "modal", "publicar"}
@@ -433,14 +466,36 @@ def publish_retryable(res):
     return str(res.get("error") or "").strip().lower() == "sin salida"
 
 
+def _consume_cmd(path):
+    """Retira el comando para que no se ejecute dos veces.
+
+    Un `publish_now` que no se puede retirar se repetiria en cada tick (2 s) y
+    publicaria el mismo texto una y otra vez. Por eso: borrar; si falla, apartar
+    el archivo; si tampoco se puede, devolver False y no actuar (fail-closed).
+    """
+    try:
+        os.remove(path)
+        return True
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        log("cmd remove err " + str(exc))
+    stale = path + ".failed-" + time.strftime("%Y%m%d-%H%M%S")
+    try:
+        os.replace(path, stale)
+        log("cmd apartado en " + stale)
+        return True
+    except OSError as exc:
+        log("cmd no se pudo apartar (%s); comando ignorado para no repetir publicacion" % exc)
+        return False
+
+
 def apply_cmd(cfg):
     if not os.path.exists(CMD):
         return cfg
     cmd = read_json(CMD, {})
-    try:
-        os.remove(CMD)
-    except Exception:
-        pass
+    if not _consume_cmd(CMD):
+        return cfg
     # La vista previa es una consulta: no debe tocar la programación activa.
     # Por eso se resuelve antes de copiar enabled/topic/text al estado.
     if str(cmd.get("action") or "") == "preview":
@@ -508,6 +563,15 @@ def publish_pending(cfg):
     if not text:
         log("publish_now sin texto: omitido")
         return cfg, None
+    # Persistir el consumo ANTES de publicar: si el proceso muere despues del
+    # post pero antes de guardar el estado, al reiniciar el `pending` seguiria
+    # en disco y se publicaria otra vez (duplicado). Si no se puede guardar,
+    # no se publica (fail-closed).
+    try:
+        write_json(CFG, cfg)
+    except Exception as exc:
+        log("publish_pending: no se pudo persistir el consumo (%s); no se publica" % exc)
+        return cfg, None
     t0 = int(time.time() * 1000)
     res = publish(text)
     last = {"ok": bool(res.get("ok")), "text": text[:300],
@@ -534,6 +598,24 @@ def publish_pending(cfg):
     return cfg, res
 
 
+def _write_pid():
+    """Escribe scheduler.pid de forma atomica y durable (mkstemp+fsync+replace)."""
+    tmp = PID + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, PID)
+        cxtlib._fsync_dir(PID)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def main():
     if os.path.exists(PID):
         try:
@@ -542,10 +624,11 @@ def main():
             os.kill(old, 0)
             log("ya hay un scheduler vivo pid=" + str(old))
             return
-        except Exception:
-            pass
-    with open(PID, "w") as f:
-        f.write(str(os.getpid()))
+        except (ProcessLookupError, ValueError):
+            log("pid file obsoleto; se reescribe")
+        except OSError as e:
+            log("pid file ilegible (%s); se reescribe" % e)
+    _write_pid()
     log("scheduler arranca pid=" + str(os.getpid()))
     while True:
         try:

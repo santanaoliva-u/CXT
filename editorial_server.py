@@ -32,12 +32,26 @@ def _state_dir() -> Path:
     return Path.home() / ".cxt"
 
 
-def _token() -> str:
+class TokenReadError(RuntimeError):
+    """El token existe pero no se puede leer o esta vacio."""
+
+
+def _token(*, strict: bool = False) -> str:
     path = _state_dir() / "editorial.token"
     try:
-        return path.read_text(encoding="utf-8").strip()
-    except OSError:
+        token = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        # Ausencia intencional: autenticacion desactivada por compatibilidad.
         return ""
+    except OSError as exc:
+        if strict:
+            raise TokenReadError(f"no se pudo leer token {path}: {exc}") from exc
+        return ""
+    if not token and strict:
+        raise TokenReadError(
+            f"token {path} vacio; elimina el archivo para desactivar la autenticacion"
+        )
+    return token
 
 
 def _write_cmd(payload: dict) -> None:
@@ -347,6 +361,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=PORT)
     parser.add_argument("--check", action="store_true", help="comprueba configuración y sale")
     args = parser.parse_args(argv)
+    try:
+        _token(strict=True)
+    except TokenReadError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     if args.check:
         print(json.dumps({
             "ok": True,

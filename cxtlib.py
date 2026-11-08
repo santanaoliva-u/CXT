@@ -232,19 +232,55 @@ def norm(s):
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
 
-def load_json(path, default=None):
+class JsonStateError(RuntimeError):
+    """Estado JSON presente pero ilegible: no se puede degradar a vacio."""
+
+
+def load_json(path, default=None, *, strict=False):
+    """Lee JSON. Ausente -> default. Ilegible -> JsonStateError (strict) o aviso+default."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except FileNotFoundError:
         return {} if default is None else default
+    except (OSError, ValueError) as exc:
+        msg = "estado JSON ilegible %s: %s" % (path, exc)
+        if strict:
+            raise JsonStateError(msg) from exc
+        print("load_json warn " + msg, flush=True)
+        return {} if default is None else default
+
+
+def _fsync_dir(path):
+    """Best effort: hace durable el rename en el directorio que contiene path."""
+    d = os.path.dirname(os.path.abspath(path)) or "."
+    try:
+        fd = os.open(d, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def write_json_atomic(path, obj, indent=None):
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=indent)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=indent)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        _fsync_dir(path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def write_status(path, d):

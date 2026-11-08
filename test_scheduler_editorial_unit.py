@@ -1,3 +1,5 @@
+import os
+import stat
 import json
 import sys
 import types
@@ -258,7 +260,8 @@ def test_apply_cmd_publish_now_preserva_programacion(tmp_path, monkeypatch):
     assert not cmd.exists()
 
 
-def test_publish_pending_publica_sin_tocar_programacion(monkeypatch):
+def test_publish_pending_publica_sin_tocar_programacion(tmp_path, monkeypatch):
+    monkeypatch.setattr(S, "CFG", str(tmp_path / "schedule.json"))
     monkeypatch.setattr(S, "publish", lambda text: {"ok": True})
     monkeypatch.setattr(S, "log", lambda msg: None)
 
@@ -292,7 +295,8 @@ def test_publish_pending_publica_sin_tocar_programacion(monkeypatch):
     assert out["text"] == "original"
 
 
-def test_publish_pending_fallo_no_apaga_programacion(monkeypatch):
+def test_publish_pending_fallo_no_apaga_programacion(tmp_path, monkeypatch):
+    monkeypatch.setattr(S, "CFG", str(tmp_path / "schedule.json"))
     monkeypatch.setattr(S, "publish", lambda text: {"ok": False, "stage": "modal"})
     monkeypatch.setattr(S, "log", lambda msg: None)
     monkeypatch.setattr(S, "EDITORIAL_META", {})
@@ -320,3 +324,157 @@ def test_publish_pending_fallo_no_apaga_programacion(monkeypatch):
     assert out["enabled"] is True
     assert out["remaining"] == 2
     assert out["next_at"] == 9999999999999
+
+
+def test_publish_usa_temporal_privado_y_no_sigue_symlink(tmp_path, monkeypatch):
+    victim = tmp_path / "victim.txt"
+    victim.write_text("contenido original intacto", encoding="utf-8")
+    ataque = tmp_path / "cxt_auto_post.txt"
+    ataque.symlink_to(victim)
+
+    vistos = {}
+
+    def fake_run(argv, **kwargs):
+        assert argv[:3] == ["python3", "-u", S.PUB]
+        path = argv[3]
+        vistos["path"] = path
+        vistos["parent"] = os.path.dirname(path)
+        vistos["mode"] = stat.S_IMODE(os.stat(path).st_mode)
+        with open(path, encoding="utf-8") as handle:
+            vistos["texto"] = handle.read()
+        return types.SimpleNamespace(stdout='{"ok": true}\n', stderr="", returncode=0)
+
+    monkeypatch.setattr(S, "DIR", str(tmp_path))
+    monkeypatch.setattr(S, "resolve_tab", lambda: "1")
+    monkeypatch.setattr(S, "log", lambda msg: None)
+    monkeypatch.setattr(S.subprocess, "run", fake_run)
+
+    res = S.publish("texto de prueba")
+
+    assert res == {"ok": True}
+    assert vistos["parent"] == str(tmp_path)
+    assert os.path.basename(vistos["path"]).startswith("cxt_auto_post_")
+    assert vistos["mode"] == 0o600
+    assert vistos["texto"] == "texto de prueba"
+    assert not os.path.exists(vistos["path"])
+    assert list(tmp_path.glob("cxt_auto_post_*.txt")) == []
+    assert ataque.is_symlink()
+    assert ataque.resolve() == victim
+    assert victim.read_text(encoding="utf-8") == "contenido original intacto"
+
+
+def test_write_pid_es_atomico_y_limpio(tmp_path, monkeypatch):
+    pid_file = tmp_path / "scheduler.pid"
+    monkeypatch.setattr(S, "PID", str(pid_file))
+    S._write_pid()
+    assert pid_file.read_text(encoding="utf-8") == str(os.getpid())
+    assert [p.name for p in tmp_path.iterdir()] == ["scheduler.pid"]
+
+
+def test_write_pid_fallido_preserva_pid_viejo(tmp_path, monkeypatch):
+    pid_file = tmp_path / "scheduler.pid"
+    pid_file.write_text("12345", encoding="utf-8")
+    monkeypatch.setattr(S, "PID", str(pid_file))
+
+    def boom(a, b):
+        raise OSError("replace roto")
+
+    monkeypatch.setattr(S.os, "replace", boom)
+    try:
+        S._write_pid()
+    except OSError as exc:
+        assert "replace roto" in str(exc)
+    else:
+        raise AssertionError("deberia propagar el OSError")
+    assert pid_file.read_text(encoding="utf-8") == "12345"
+    assert [p.name for p in tmp_path.iterdir()] == ["scheduler.pid"]
+
+
+def test_consume_cmd_ausente_no_falla(tmp_path):
+    assert S._consume_cmd(str(tmp_path / "no-existe.json")) is True
+
+
+def test_cmd_no_consumible_no_publica_ni_repite(tmp_path, monkeypatch):
+    cmd = tmp_path / "schedule.cmd.json"
+    cmd.write_text(json.dumps({"action": "publish_now", "text": "texto aprobado"}), encoding="utf-8")
+    monkeypatch.setattr(S, "CMD", str(cmd))
+    logs = []
+    monkeypatch.setattr(S, "log", lambda msg: logs.append(str(msg)))
+
+    def boom(*a, **k):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(S.os, "remove", boom)
+    monkeypatch.setattr(S.os, "replace", boom)
+
+    cfg = S.apply_cmd(S.defaults())
+
+    assert "pending" not in cfg
+    assert cmd.exists()
+    assert any("comando ignorado" in m for m in logs)
+
+
+def test_cmd_se_aparta_si_no_se_puede_borrar(tmp_path, monkeypatch):
+    cmd = tmp_path / "schedule.cmd.json"
+    cmd.write_text(json.dumps({"action": "publish_now", "text": "texto aprobado"}), encoding="utf-8")
+    monkeypatch.setattr(S, "CMD", str(cmd))
+    logs = []
+    monkeypatch.setattr(S, "log", lambda msg: logs.append(str(msg)))
+
+    def boom(*a, **k):
+        raise OSError("operacion no permitida")
+
+    monkeypatch.setattr(S.os, "remove", boom)
+
+    cfg = S.apply_cmd(S.defaults())
+
+    assert cfg["pending"]["text"] == "texto aprobado"
+    assert not cmd.exists()
+    assert list(tmp_path.glob("schedule.cmd.json.failed-*"))
+    assert any("cmd apartado" in m for m in logs)
+
+
+def test_publish_pending_persiste_antes_de_publicar(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "schedule.json"
+    monkeypatch.setattr(S, "CFG", str(cfg_path))
+    monkeypatch.setattr(S, "log", lambda msg: None)
+    seen = {}
+
+    def fake_publish(text):
+        seen["en_disco"] = json.loads(cfg_path.read_text(encoding="utf-8"))
+        return {"ok": True}
+
+    monkeypatch.setattr(S, "publish", fake_publish)
+
+    cfg = S.defaults()
+    cfg["pending"] = {"text": "texto manual", "topic": "fixed", "meta": {}}
+
+    out, res = S.publish_pending(cfg)
+
+    assert res == {"ok": True}
+    assert "pending" not in seen["en_disco"]
+    assert seen["en_disco"]["last"] is None
+    assert "pending" not in out
+
+
+def test_publish_pending_no_publica_si_no_puede_persistir(tmp_path, monkeypatch):
+    monkeypatch.setattr(S, "CFG", str(tmp_path / "schedule.json"))
+    logs = []
+    monkeypatch.setattr(S, "log", lambda msg: logs.append(str(msg)))
+    llamadas = []
+    monkeypatch.setattr(S, "publish", lambda text: llamadas.append(text) or {"ok": True})
+
+    def no_write(*a, **k):
+        raise OSError("disco lleno")
+
+    monkeypatch.setattr(S, "write_json", no_write)
+
+    cfg = S.defaults()
+    cfg["pending"] = {"text": "texto manual", "topic": "fixed", "meta": {}}
+
+    out, res = S.publish_pending(cfg)
+
+    assert res is None
+    assert llamadas == []
+    assert out["last"] is None
+    assert any("no se pudo persistir" in m for m in logs)
