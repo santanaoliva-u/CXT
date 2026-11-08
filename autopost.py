@@ -2777,9 +2777,13 @@ def _tick(st, cmd_path, sig=None, db=None):
             # Cobertura ya cubierta: no se re-publica una pareja `ok` solo
             # porque paso COOLDOWN_POST mientras el item seguia abierto.
             cov = coverage_state(groups_map, post_map, post_key, rel)
+            # `limit` del item es el tope POR RONDA del usuario: sin pasarlo,
+            # select_round usaba MAXGROUPS (10) y una cola con limit:3 publicaba
+            # en 10 grupos por vuelta (visto 2026-11-08, 00:38).
             selection = select_round(groups_map, post_map, post_key, now,
                                      daily_left=daily_left, rel=rel,
                                      exclude_gids=cov["covered_gids"],
+                                     maxgroups=group_limit(item.get("limit")),
                                      fast=fastmode.enabled(item=item))
         except Exception as e:
             # El ledger es el selector: si no se puede leer NO se publica a ciegas.
